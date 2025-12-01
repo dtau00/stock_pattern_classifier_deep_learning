@@ -25,8 +25,9 @@ streamlit run src/ui/app.py
 
 ## Navigation
 - **Home**: Overview and quick start
-- **Configure Download**: Download OHLCV data from Binance
-- **Manage Packages**: View and manage data packages
+- **OHLCV Manager**: Download and manage OHLCV data from Binance
+  - Download OHLCV tab: Configure and download historical data
+  - Manage Data Packages tab: View and manage downloaded packages
 - **Validate & Preview**: Check data quality
 - **Visualize Data**: Explore normalized features
 - **TA Verification**: Verify technical indicators

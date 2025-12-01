@@ -6,7 +6,7 @@ import streamlit as st
 
 def show():
     """Visualize normalized preprocessed data"""
-    st.title("📊 Visualize Data")
+    st.title("📈 Visualize Data")
     st.markdown("---")
 
     st.info("**Section Purpose:** Explore normalized feature channels in interactive charts")

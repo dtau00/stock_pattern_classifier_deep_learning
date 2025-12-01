@@ -4,7 +4,7 @@ Main Streamlit Application
 """
 
 import streamlit as st
-from pages import configure_download, manage_packages, validate_preview
+from pages import ohlcv_manager
 from pages import visualize_data, ta_verification
 
 # Page configuration
@@ -39,10 +39,8 @@ page = st.sidebar.radio(
     "Navigation",
     [
         "🏠 Home",
-        "⬇️ Configure Download",
-        "📦 Manage Packages",
-        "✅ Validate & Preview",
-        "📊 Visualize Data",
+        "📊 OHLCV Manager",
+        "📈 Visualize Data",
         "🔧 TA Verification"
     ],
     index=0
@@ -63,37 +61,28 @@ if page == "🏠 Home":
     This tool helps you manage historical market data for training the
     stock pattern classifier model.
 
-    ### Quick Start Guide:
+    ### Navigation
 
-    1. **⬇️ Configure Download**
-       Set up and download OHLCV data from Binance
-       - Select symbol (e.g., BTCUSDT, ETHUSDT)
-       - Choose timeframe (1m, 5m, 15m, 1h, 4h, 1d)
-       - Specify date range
-       - View estimated bar count
+    Use the **Navigation** radio buttons in the sidebar (left panel) to switch between pages:
 
-    2. **📦 Manage Packages**
-       View and manage downloaded data packages
-       - Browse all downloaded packages
-       - View metadata and statistics
-       - Delete or export packages
-       - Reload existing data
+    1. **📊 OHLCV Manager** - Download and validate OHLCV data from Binance
+       - **Download OHLCV Tab:** Configure and download historical data
+         - Select symbol (e.g., BTCUSDT, ETHUSDT)
+         - Choose timeframe (1m, 5m, 15m, 1h, 4h, 1d)
+         - Specify date range
+         - View estimated bar count
+       - **Validate & Preview Tab:** Check data quality and preview contents
+         - View data quality metrics and scores
+         - Detect gaps and missing bars
+         - Preview OHLCV data in multiple views
+         - Interactive candlestick and volume charts
 
-    3. **✅ Validate & Preview**
-       Check data quality and preview contents
-       - View data quality metrics
-       - Detect gaps and missing bars
-       - Preview OHLCV data
-       - Check feature correlations
-
-    4. **📊 Visualize Data**
-       Explore normalized features
+    2. **📈 Visualize Data** - Explore normalized features
        - Interactive multi-pane charts
        - View Returns, Volume, Volatility channels
        - Zoom, pan, and hover for details
 
-    5. **🔧 TA Verification**
-       Verify technical indicators
+    3. **🔧 TA Verification** - Verify technical indicators
        - Candlestick charts with overlays
        - Verify SMA, Bollinger Bands, RSI, MACD
        - Compare against raw price data
@@ -135,16 +124,10 @@ if page == "🏠 Home":
         - Phase 6: Visualization tools
         """)
 
-elif page == "⬇️ Configure Download":
-    configure_download.show()
+elif page == "📊 OHLCV Manager":
+    ohlcv_manager.show()
 
-elif page == "📦 Manage Packages":
-    manage_packages.show()
-
-elif page == "✅ Validate & Preview":
-    validate_preview.show()
-
-elif page == "📊 Visualize Data":
+elif page == "📈 Visualize Data":
     visualize_data.show()
 
 elif page == "🔧 TA Verification":

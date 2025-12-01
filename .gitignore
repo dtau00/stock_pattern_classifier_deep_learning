@@ -141,7 +141,7 @@ runs/
 tensorboard/
 
 # Datasets (uncomment if you don't want to track datasets)
-# data/
+data/
 # datasets/
 # *.csv
 # *.npy
