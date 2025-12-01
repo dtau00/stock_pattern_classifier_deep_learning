@@ -141,7 +141,8 @@ runs/
 tensorboard/
 
 # Datasets (uncomment if you don't want to track datasets)
-data/
+# Ignore data directory but allow src/data/ source code
+/data/
 # datasets/
 # *.csv
 # *.npy
