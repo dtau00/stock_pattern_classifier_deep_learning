@@ -21,8 +21,8 @@ streamlit>=1.29.0
 
 # Financial Data
 yfinance>=0.2.0
-pandas-ta>=0.3.14b
-ta-lib>=0.4.0  # Technical analysis library
+# pandas-ta  # Install separately: pip install git+https://github.com/twopirllc/pandas-ta.git
+# ta-lib>=0.4.0  # Requires binary dependencies - install separately if needed
 python-binance>=1.0.19  # Binance API client
 requests>=2.31.0
 
