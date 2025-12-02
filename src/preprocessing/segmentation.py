@@ -79,8 +79,11 @@ def create_sliding_windows(df: pd.DataFrame,
 
         # Add timestamps if available
         if 'timestamp' in df.columns:
-            window_metadata['start_timestamp'] = int(df.iloc[i]['timestamp'])
-            window_metadata['end_timestamp'] = int(df.iloc[i + sequence_length - 1]['timestamp'])
+            start_ts = df.iloc[i]['timestamp']
+            end_ts = df.iloc[i + sequence_length - 1]['timestamp']
+            # Convert pandas Timestamp to Unix timestamp (milliseconds)
+            window_metadata['start_timestamp'] = int(pd.Timestamp(start_ts).timestamp() * 1000)
+            window_metadata['end_timestamp'] = int(pd.Timestamp(end_ts).timestamp() * 1000)
 
         metadata.append(window_metadata)
 

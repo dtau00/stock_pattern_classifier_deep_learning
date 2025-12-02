@@ -1,14 +1,7 @@
-"""
-Page modules for Data Manager UI
-"""
-from . import ohlcv_manager
-from . import validate_preview
+"""UI Pages Module"""
+from . import download_ohlcv
+from . import manage_packages
 from . import visualize_data
-from . import ta_verification
+from . import features_visualization
 
-__all__ = [
-    'ohlcv_manager',
-    'validate_preview',
-    'visualize_data',
-    'ta_verification'
-]
+__all__ = ['download_ohlcv', 'manage_packages', 'visualize_data', 'features_visualization']

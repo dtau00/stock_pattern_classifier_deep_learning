@@ -33,15 +33,34 @@ def detect_missing_bars(df: pd.DataFrame, interval: str) -> List[Tuple[int, int,
 
     # Find gaps (where diff > expected interval)
     gaps = []
+    interval_td = pd.Timedelta(milliseconds=interval_ms)
+
     for idx in range(1, len(df_sorted)):
         diff = time_diffs.iloc[idx]
-        if pd.notna(diff) and diff > interval_ms:
-            # Calculate number of missing bars
-            num_missing = int((diff / interval_ms) - 1)
-            if num_missing > 0:
-                missing_start = df_sorted.iloc[idx - 1]['timestamp'] + interval_ms
-                missing_end = df_sorted.iloc[idx]['timestamp'] - interval_ms
-                gaps.append((missing_start, missing_end, num_missing))
+        if pd.notna(diff):
+            # Convert Timedelta to milliseconds if needed
+            diff_ms = diff.total_seconds() * 1000 if hasattr(diff, 'total_seconds') else diff
+
+            if diff_ms > interval_ms:
+                # Calculate number of missing bars
+                num_missing = int((diff_ms / interval_ms) - 1)
+                if num_missing > 0:
+                    # Get timestamps (may be Timestamp or int)
+                    ts_before = df_sorted.iloc[idx - 1]['timestamp']
+                    ts_after = df_sorted.iloc[idx]['timestamp']
+
+                    # Add/subtract using Timedelta for Timestamp objects, or raw ms for integers
+                    if isinstance(ts_before, pd.Timestamp):
+                        missing_start = ts_before + interval_td
+                        missing_end = ts_after - interval_td
+                        # Convert back to milliseconds for storage
+                        missing_start = int(missing_start.timestamp() * 1000)
+                        missing_end = int(missing_end.timestamp() * 1000)
+                    else:
+                        missing_start = ts_before + interval_ms
+                        missing_end = ts_after - interval_ms
+
+                    gaps.append((missing_start, missing_end, num_missing))
 
     return gaps
 
@@ -178,10 +197,18 @@ def detect_gaps(df: pd.DataFrame, interval: str, max_gap_length: int = 5) -> Lis
 
     for gap_start_ts, gap_end_ts, gap_count in all_gaps:
         if gap_count >= max_gap_length:
+            # Convert timestamps to the same type as the dataframe for comparison
+            if isinstance(df_sorted['timestamp'].iloc[0], pd.Timestamp):
+                gap_start_cmp = pd.Timestamp(gap_start_ts, unit='ms')
+                gap_end_cmp = pd.Timestamp(gap_end_ts, unit='ms')
+            else:
+                gap_start_cmp = gap_start_ts
+                gap_end_cmp = gap_end_ts
+
             # Find indices in sorted dataframe
             # Gap occurs between the bar before gap_start_ts and the bar after gap_end_ts
-            start_idx = df_sorted[df_sorted['timestamp'] < gap_start_ts].index[-1] if len(df_sorted[df_sorted['timestamp'] < gap_start_ts]) > 0 else 0
-            end_idx = df_sorted[df_sorted['timestamp'] > gap_end_ts].index[0] if len(df_sorted[df_sorted['timestamp'] > gap_end_ts]) > 0 else len(df_sorted) - 1
+            start_idx = df_sorted[df_sorted['timestamp'] < gap_start_cmp].index[-1] if len(df_sorted[df_sorted['timestamp'] < gap_start_cmp]) > 0 else 0
+            end_idx = df_sorted[df_sorted['timestamp'] > gap_end_cmp].index[0] if len(df_sorted[df_sorted['timestamp'] > gap_end_cmp]) > 0 else len(df_sorted) - 1
 
             large_gaps.append((start_idx, end_idx, gap_count))
 

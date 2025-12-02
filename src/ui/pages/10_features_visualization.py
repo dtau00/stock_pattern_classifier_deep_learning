@@ -17,139 +17,39 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.features import engineer_all_features, compute_feature_correlation
-from src.visualization import (
-    create_tradingview_chart,
-    create_features_chart,
-    create_comparison_chart
-)
+try:
+    from src.features import engineer_all_features, compute_feature_correlation
+    from src.visualization import (
+        create_tradingview_chart,
+        create_features_chart,
+        create_comparison_chart
+    )
+    FEATURES_AVAILABLE = True
+except ImportError:
+    # Fallback to our basic visualization if features module not available
+    from src.visualization.data_viz import plot_ta_verification
+    FEATURES_AVAILABLE = False
+
+# Import shared component
+from src.ui.components import load_package_with_date_range
 
 
 def show():
     """Feature Visualization - Interactive TradingView-style charts"""
-    st.title("📊 Feature Visualization")
+    st.title("Feature Visualization")
     st.markdown("---")
 
-    st.info("**Section Purpose:** Visualize engineered features on OHLCV data with interactive TradingView-style charts")
+    # Use reusable component for loading package with date range
+    load_package_with_date_range(
+        packages_dir=str(project_root / "data" / "packages"),
+        session_key='feature_viz_data',
+        key_prefix='feature_viz',
+        file_extension='.csv',
+        package_type="OHLCV"
+    )
 
-    # Sidebar configuration
-    st.sidebar.markdown("### Chart Configuration")
-
-    # Data package selection
-    st.markdown("## 📦 Load Data Package")
-
-    df = None
-
-    # Look for data packages
-    packages_dir = project_root / "data" / "packages"
-
-    if packages_dir.exists():
-        package_files = list(packages_dir.glob("*.csv"))
-
-        if package_files:
-            package_names = [f.name for f in package_files]
-            selected_package = st.selectbox(
-                "Select data package:",
-                package_names,
-                help="Choose from downloaded OHLCV data packages"
-            )
-
-            # Automatically load the selected package
-            try:
-                package_path = packages_dir / selected_package
-
-                with st.spinner(f"📥 Loading {selected_package}..."):
-                    df = pd.read_csv(package_path)
-
-                    # Convert timestamp if present
-                    if 'timestamp' in df.columns:
-                        try:
-                            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                        except:
-                            try:
-                                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                            except:
-                                st.warning("⚠️ Could not parse timestamp column")
-
-                    st.success(f"✓ Loaded {len(df):,} bars from {selected_package}")
-
-                    # Show package info and get date range
-                    if 'timestamp' in df.columns and df['timestamp'].notna().any():
-                        min_date = df['timestamp'].min().date()
-                        max_date = df['timestamp'].max().date()
-
-                        # Date range selection
-                        st.markdown("### 📆 Select Date Range")
-                        col1, col2, col3 = st.columns(3)
-
-                        with col1:
-                            start_date = st.date_input(
-                                "Start Date",
-                                value=min_date,
-                                min_value=min_date,
-                                max_value=max_date,
-                                help="Select the start date for analysis"
-                            )
-
-                        with col2:
-                            end_date = st.date_input(
-                                "End Date",
-                                value=max_date,
-                                min_value=min_date,
-                                max_value=max_date,
-                                help="Select the end date for analysis"
-                            )
-
-                        with col3:
-                            # Show estimated bars in range
-                            mask = (df['timestamp'].dt.date >= start_date) & (df['timestamp'].dt.date <= end_date)
-                            bars_in_range = mask.sum()
-                            st.metric("Bars in selected range", f"{bars_in_range:,}")
-
-                        # Validate date range
-                        if start_date > end_date:
-                            st.error("❌ Start date must be before end date")
-                            df = None
-                        else:
-                            # Load button
-                            if st.button("📊 Load & Visualize", type="primary"):
-                                # Filter data by selected date range
-                                original_len = len(df)
-                                df = df[mask].copy()
-
-                                if len(df) == 0:
-                                    st.error("❌ No data in selected date range")
-                                    df = None
-                                else:
-                                    # Show filtered data info
-                                    filtered_info = f"✓ Loaded {len(df):,} bars"
-                                    if len(df) < original_len:
-                                        filtered_info += f" (filtered from {original_len:,})"
-                                    filtered_info += f" | {start_date} to {end_date}"
-                                    st.success(filtered_info)
-                            else:
-                                # Button not clicked yet, don't process data
-                                df = None
-                    else:
-                        with st.expander("📋 Package Info"):
-                            st.write(f"**File:** {selected_package}")
-                            st.write(f"**Rows:** {len(df):,}")
-                            st.write(f"**Columns:** {', '.join(df.columns)}")
-                        st.warning("⚠️ No timestamp column found - using entire dataset")
-
-                        # Load button for data without timestamp
-                        if not st.button("📊 Load & Visualize", type="primary", key="load_no_timestamp"):
-                            df = None
-
-            except Exception as e:
-                st.error(f"❌ Error loading package: {e}")
-                df = None
-        else:
-            st.warning("⚠️ No data packages found in data/packages/")
-            st.info("💡 Go to **OHLCV Manager** to download OHLCV data first")
-    else:
-        st.warning("⚠️ Data packages directory not found")
-        st.info("💡 Go to **OHLCV Manager** to download OHLCV data first")
+    # Get data from session state
+    df = st.session_state.get('feature_viz_data', None)
 
     # If we have data, process and display
     if df is not None:
@@ -249,7 +149,7 @@ def show():
                     )
 
                     # Chart height control
-                    chart_height = st.sidebar.slider(
+                    chart_height = st.slider(
                         "Chart Height (px)",
                         min_value=600,
                         max_value=1400,
@@ -363,61 +263,6 @@ Critical Issues: {len(report['critical'])}
     else:
         # Help section when no data loaded
         st.markdown("---")
-        st.info("👆 Select a data source above to get started")
-
-        with st.expander("📖 How to Use This Page"):
-            st.markdown("""
-            ### Quick Start Guide
-
-            1. **Load Data Package:**
-               - Select a data package from the dropdown
-               - Data loads automatically when selected
-               - View package info in the expandable section
-
-            2. **Select Date Range:**
-               - Choose start and end dates from the available range
-               - Date range is based on the loaded package's data
-               - Defaults to full package range
-               - See bar count for selected range
-
-            3. **Click "Load & Visualize":**
-               - Processes the data with selected date range
-               - Applies feature engineering
-               - Generates interactive charts
-
-            4. **Configure Parameters (Optional):**
-               - Adjust OBV EMA period (default: 20)
-               - Adjust NATR period (default: 14)
-
-            5. **View Results:**
-               - Feature statistics
-               - Correlation analysis
-               - Interactive TradingView-style charts
-
-            6. **Export:**
-               - Download engineered features as CSV
-               - Save interactive charts as HTML
-               - Export correlation reports
-
-            ### What You'll See
-
-            - **Returns Channel:** Log returns (price momentum)
-            - **Volume/Liquidity Channel:** OBV flow (buying/selling pressure)
-            - **Volatility/Risk Channel:** NATR (market volatility)
-
-            ### Chart Types
-
-            - **All Features:** See all 3 channels together (recommended)
-            - **Raw OHLCV:** Traditional candlestick chart
-            - **Comparisons:** Side-by-side price vs feature
-
-            All charts are fully interactive:
-            - Zoom: Click and drag
-            - Pan: Shift + drag
-            - Hover: See exact values
-            - Reset: Double-click
-            """)
-
 
 if __name__ == "__main__":
     show()
