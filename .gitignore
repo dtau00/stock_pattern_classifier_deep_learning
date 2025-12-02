@@ -148,6 +148,13 @@ tensorboard/
 # *.npy
 # *.npz
 
+# Examples - static demo files (superseded by live Streamlit UI)
+examples/
+
+# Documentation and tests
+/docs/
+/tests/
+
 # Weights & Biases
 wandb/
 
