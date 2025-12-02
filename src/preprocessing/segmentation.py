@@ -9,35 +9,83 @@ This module provides functions to:
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union, Optional
 import h5py
 import os
 
 
-def create_sliding_windows(df: pd.DataFrame,
-                           normalized_channels: List[str],
+def create_sliding_windows(data: Union[pd.DataFrame, np.ndarray],
+                           normalized_channels: Optional[List[str]] = None,
                            sequence_length: int = 127,
                            overlap: float = 0.5,
-                           exclude_column: str = 'is_excluded') -> Tuple[np.ndarray, List[Dict]]:
+                           exclude_column: str = 'is_excluded',
+                           gap_flags: Optional[np.ndarray] = None,
+                           window_size: Optional[int] = None,
+                           step_size: Optional[int] = None) -> Tuple[np.ndarray, Union[List[Dict], Dict]]:
     """
     Create sliding windows from normalized time series data.
 
+    Supports two modes:
+    1. DataFrame mode: Pass df and normalized_channels
+    2. NumPy array mode: Pass numpy array directly with optional gap_flags
+
     Args:
-        df: DataFrame with normalized channels
-        normalized_channels: List of normalized column names (e.g., ['returns_norm', 'volume_norm'])
+        data: DataFrame with normalized channels OR numpy array of features
+        normalized_channels: List of normalized column names (required for DataFrame mode)
         sequence_length: Length of each window in bars (default: 127)
         overlap: Overlap fraction between windows (default: 0.5 = 50%)
         exclude_column: Column name for exclusion flags (default: 'is_excluded')
+        gap_flags: Boolean array marking rows to exclude (for numpy array mode)
+        window_size: Alias for sequence_length (for backward compatibility)
+        step_size: Direct step size (overrides overlap calculation)
 
     Returns:
         Tuple of:
         - windows: numpy array of shape (num_windows, sequence_length, num_channels)
-        - metadata: list of dicts with window metadata (start_idx, end_idx, timestamps)
+        - metadata: list of dicts with window metadata OR dict with metadata
     """
-    # Calculate step size
-    step = int(sequence_length * (1 - overlap))
-    if step < 1:
-        step = 1
+    # Handle backward compatibility parameters
+    if window_size is not None:
+        sequence_length = window_size
+    if step_size is None:
+        step_size = int(sequence_length * (1 - overlap))
+        if step_size < 1:
+            step_size = 1
+
+    # NumPy array mode
+    if isinstance(data, np.ndarray):
+        windows = []
+        window_timestamps = []
+
+        for i in range(0, len(data) - sequence_length + 1, step_size):
+            # Check if window overlaps with gaps
+            if gap_flags is not None and np.any(gap_flags[i:i + sequence_length]):
+                continue
+
+            # Extract window
+            window_data = data[i:i + sequence_length]
+
+            # Check for NaN values
+            if np.isnan(window_data).any():
+                continue
+
+            windows.append(window_data)
+            window_timestamps.append(i)
+
+        # Convert to numpy array
+        if len(windows) == 0:
+            num_channels = data.shape[1] if len(data.shape) > 1 else 1
+            return np.array([]).reshape(0, sequence_length, num_channels), {'window_timestamps': []}
+
+        windows_array = np.stack(windows, axis=0)
+        metadata = {'window_timestamps': window_timestamps}
+
+        return windows_array, metadata
+
+    # DataFrame mode
+    df = data
+    if normalized_channels is None:
+        raise ValueError("normalized_channels is required when data is a DataFrame")
 
     # Check if exclusion column exists
     has_exclusion = exclude_column in df.columns
@@ -46,13 +94,17 @@ def create_sliding_windows(df: pd.DataFrame,
     metadata = []
 
     # Slide through the data
-    for i in range(0, len(df) - sequence_length + 1, step):
+    for i in range(0, len(df) - sequence_length + 1, step_size):
         # Extract window
         window_df = df.iloc[i:i + sequence_length]
 
         # Check if window should be excluded
         if has_exclusion and window_df[exclude_column].any():
             # Skip this window (contains excluded data)
+            continue
+
+        # Check if gap_flags provided
+        if gap_flags is not None and np.any(gap_flags[i:i + sequence_length]):
             continue
 
         # Extract normalized channels

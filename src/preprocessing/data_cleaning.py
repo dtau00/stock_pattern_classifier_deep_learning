@@ -215,6 +215,42 @@ def detect_gaps(df: pd.DataFrame, interval: str, max_gap_length: int = 5) -> Lis
     return large_gaps
 
 
+def flag_exclusions(df: pd.DataFrame, gaps: List[Tuple[int, int, int]],
+                    window_size: int = 127) -> np.ndarray:
+    """
+    Create boolean array flagging rows that should be excluded from window creation.
+
+    A row should be excluded if it would be part of a window that overlaps with a gap.
+
+    Args:
+        df: DataFrame to analyze
+        gaps: List of (start_idx, end_idx, gap_length) tuples from detect_gaps()
+        window_size: Length of sliding windows (default: 127)
+
+    Returns:
+        Boolean numpy array of length len(df) where True = exclude this row
+    """
+    exclusion_flags = np.zeros(len(df), dtype=bool)
+
+    # For each gap, mark all rows that would be part of an overlapping window
+    for gap_start_idx, gap_end_idx, gap_length in gaps:
+        # A window of length L starting at position i includes indices [i, i+L-1]
+        # It overlaps with gap if any part of [i, i+L-1] intersects with the gap
+
+        # Window can start as early as (gap_start_idx - window_size + 1)
+        # Window can start as late as gap_end_idx
+        window_start_min = max(0, gap_start_idx - window_size + 1)
+        window_start_max = min(len(df) - 1, gap_end_idx)
+
+        # Mark all rows that could be part of an excluded window
+        affected_start = window_start_min
+        affected_end = min(len(df) - 1, window_start_max + window_size - 1)
+
+        exclusion_flags[affected_start:affected_end + 1] = True
+
+    return exclusion_flags
+
+
 def mark_excluded_windows(df: pd.DataFrame, gaps: List[Tuple[int, int, int]],
                           sequence_length: int = 127) -> pd.DataFrame:
     """
@@ -233,29 +269,5 @@ def mark_excluded_windows(df: pd.DataFrame, gaps: List[Tuple[int, int, int]],
         DataFrame with 'is_excluded' column added
     """
     df_marked = df.copy()
-    df_marked['is_excluded'] = False
-
-    # For each gap, mark all windows that would overlap with it
-    for gap_start_idx, gap_end_idx, gap_length in gaps:
-        # A window of length L starting at position i includes indices [i, i+L-1]
-        # It overlaps with gap at gap_start_idx if:
-        #   - Window starts before or at gap: i <= gap_start_idx
-        #   - Window extends to or past gap: i + L - 1 >= gap_start_idx
-        # Simplifying: gap_start_idx - L + 1 <= i <= gap_start_idx
-
-        # Find all windows that would include this gap
-        # Window can start as early as (gap_start_idx - sequence_length + 1)
-        # Window can start as late as gap_end_idx (window would extend past the gap)
-
-        window_start_min = max(0, gap_start_idx - sequence_length + 1)
-        window_start_max = min(len(df_marked) - 1, gap_end_idx)
-
-        # Mark all rows that could be part of an excluded window
-        # Any window starting in [window_start_min, window_start_max] is affected
-        # The rows affected are [window_start_min, window_start_max + sequence_length - 1]
-        affected_start = window_start_min
-        affected_end = min(len(df_marked) - 1, window_start_max + sequence_length - 1)
-
-        df_marked.loc[affected_start:affected_end, 'is_excluded'] = True
-
+    df_marked['is_excluded'] = flag_exclusions(df, gaps, sequence_length)
     return df_marked

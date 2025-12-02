@@ -180,6 +180,62 @@ def apply_normalization(df: pd.DataFrame,
     return df_normalized
 
 
+def normalize_features(df: pd.DataFrame,
+                       channels: List[str],
+                       winsorize: bool = False,
+                       winsorize_method: str = 'std',
+                       winsorize_std: float = 3.0,
+                       winsorize_percentile: Tuple[float, float] = (1.0, 99.0)) -> Tuple[pd.DataFrame, Dict]:
+    """
+    Convenience function to calculate stats and apply normalization in one step.
+
+    This is useful for validation/testing where we don't need to separate
+    training and inference. For production use, use calculate_normalization_stats()
+    on training data and apply_normalization() separately.
+
+    Args:
+        df: DataFrame to normalize
+        channels: List of column names to normalize
+        winsorize: Whether to apply winsorization before calculating stats
+        winsorize_method: 'std' or 'percentile'
+        winsorize_std: Threshold for std winsorization
+        winsorize_percentile: Range for percentile winsorization
+
+    Returns:
+        Tuple of (normalized DataFrame, stats dict)
+    """
+    # Calculate stats from the data
+    stats = calculate_normalization_stats(
+        df,
+        channels,
+        winsorize=winsorize,
+        winsorize_method=winsorize_method,
+        winsorize_std=winsorize_std,
+        winsorize_percentile=winsorize_percentile
+    )
+
+    # Apply winsorization if requested
+    if winsorize:
+        df_processed = winsorize_dataframe(
+            df,
+            channels,
+            method=winsorize_method,
+            std_threshold=winsorize_std,
+            percentile_range=winsorize_percentile
+        )
+    else:
+        df_processed = df.copy()
+
+    # Apply normalization in-place (no suffix)
+    for channel, channel_stats in stats.items():
+        if channel in df_processed.columns:
+            mean = channel_stats['mean']
+            std = channel_stats['std']
+            df_processed[channel] = (df_processed[channel] - mean) / std
+
+    return df_processed, stats
+
+
 def get_winsorization_report(df_original: pd.DataFrame,
                              df_winsorized: pd.DataFrame,
                              channels: List[str]) -> Dict:

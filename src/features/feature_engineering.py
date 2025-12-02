@@ -265,3 +265,7 @@ def engineer_all_features(
     df = calculate_natr(df, period=natr_period)
 
     return df
+
+
+# Alias for backward compatibility
+engineer_features = engineer_all_features
