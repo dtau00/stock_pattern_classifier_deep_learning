@@ -41,7 +41,7 @@ page = st.sidebar.radio(
         "🏠 Home",
         "📊 OHLCV Manager",
         "📈 Visualize Data",
-        "🔧 TA Verification"
+        "📊 Feature Visualization"
     ],
     index=0
 )
@@ -82,10 +82,11 @@ if page == "🏠 Home":
        - View Returns, Volume, Volatility channels
        - Zoom, pan, and hover for details
 
-    3. **🔧 TA Verification** - Verify technical indicators
-       - Candlestick charts with overlays
-       - Verify SMA, Bollinger Bands, RSI, MACD
-       - Compare against raw price data
+    3. **📊 Feature Visualization** - Interactive TradingView-style charts
+       - Select data packages or upload CSV
+       - Apply feature engineering in real-time
+       - View all 3 feature channels (Returns, Volume, Volatility)
+       - Export charts and correlation reports
 
     ---
 
@@ -130,5 +131,5 @@ elif page == "📊 OHLCV Manager":
 elif page == "📈 Visualize Data":
     visualize_data.show()
 
-elif page == "🔧 TA Verification":
+elif page == "📊 Feature Visualization":
     ta_verification.show()

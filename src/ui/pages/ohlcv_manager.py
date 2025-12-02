@@ -33,7 +33,7 @@ def show():
     st.markdown("---")
 
     # Create tabs
-    tab1, tab2 = st.tabs(["⬇️ Download OHLCV", "✅ Validate & Preview"])
+    tab1, tab2 = st.tabs(["⬇️ Download OHLCV", "✅ Manage Data Package"])
 
     with tab1:
         show_download_tab()
@@ -44,15 +44,14 @@ def show():
 
 def show_download_tab():
     """Download OHLCV data tab"""
-    st.info("**Purpose:** Configure parameters and download historical OHLCV data from Binance")
 
     # Configuration Section
-    st.subheader("📋 Download Configuration")
+    st.subheader("📋 Download OHLCV Data Package")
 
+    # Interval and date range - second row with 2 columns
     col1, col2 = st.columns(2)
 
     with col1:
-        # Symbol input with popular symbols
         symbol_mode = st.radio(
             "Symbol Selection",
             ["Popular Symbols", "Custom Symbol"],
@@ -73,6 +72,7 @@ def show_download_tab():
                 help="Enter trading pair symbol (e.g., BTCUSDT)"
             ).upper().strip()
 
+    with col2:
         # Interval selection
         interval = st.selectbox(
             "Timeframe",
@@ -81,7 +81,6 @@ def show_download_tab():
             help="Select candlestick interval"
         )
 
-    with col2:
         # Date range selection
         default_start = datetime.now() - timedelta(days=30)
         default_end = datetime.now()
@@ -119,7 +118,6 @@ def show_download_tab():
 
     # Estimation Section
     st.markdown("---")
-    st.subheader("📊 Estimation")
 
     if not validation_errors:
         try:
@@ -142,22 +140,19 @@ def show_download_tab():
             with col1:
                 st.metric(
                     "Estimated Bars",
-                    f"{estimated_bars:,}",
-                    help="Approximate number of candlestick bars"
+                    f"{estimated_bars:,}"
                 )
 
             with col2:
                 if estimated_size_mb >= 1:
                     st.metric(
                         "Estimated Size",
-                        f"{estimated_size_mb:.2f} MB",
-                        help="Approximate file size (CSV format)"
+                        f"{estimated_size_mb:.2f} MB"
                     )
                 else:
                     st.metric(
                         "Estimated Size",
-                        f"{estimated_size_kb:.2f} KB",
-                        help="Approximate file size (CSV format)"
+                        f"{estimated_size_kb:.2f} KB"
                     )
 
             with col3:
@@ -170,10 +165,9 @@ def show_download_tab():
 
             # Download section
             st.markdown("---")
-            st.subheader("⬇️ Download")
 
             # Download button
-            if st.button("🚀 Download Data Package", type="primary", use_container_width=True):
+            if st.button("Download Data Package", type="primary", use_container_width=True):
                 download_package(symbol, interval, start_str, end_str, estimated_bars)
 
         except Exception as e:
@@ -383,19 +377,23 @@ def show_validate_preview_tab():
         label = f"{pkg['symbol']} {pkg['interval']} ({pkg['start_date']} to {pkg['end_date']})"
         package_options[label] = pkg
 
-    selected_label = st.selectbox(
-        "Choose a package to validate",
-        list(package_options.keys()),
-        index=0
-    )
+    # Package selection with delete button on the same row
+    col1, col2 = st.columns([5, 1])
+
+    with col1:
+        selected_label = st.selectbox(
+            "Choose a package to validate",
+            list(package_options.keys()),
+            index=0
+        )
+
+    with col2:
+        # Add spacing to align with selectbox
+        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+        if st.button("🗑️", type="secondary", help="Delete this package"):
+            st.session_state['show_delete_confirmation'] = True
 
     package = package_options[selected_label]
-
-    # Delete button
-    col1, col2 = st.columns([4, 1])
-    with col2:
-        if st.button("🗑️ Delete Package", type="secondary", use_container_width=True):
-            st.session_state['show_delete_confirmation'] = True
 
     # Handle delete confirmation with dialog
     @st.dialog("Confirm Deletion")
