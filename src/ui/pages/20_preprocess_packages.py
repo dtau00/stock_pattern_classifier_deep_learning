@@ -71,7 +71,7 @@ def show():
     with col1:
         sequence_length = st.number_input(
             "Window Length (bars)",
-            min_value=50,
+            min_value=2,
             max_value=500,
             value=127,
             step=1,

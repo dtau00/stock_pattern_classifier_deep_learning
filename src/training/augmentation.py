@@ -159,18 +159,19 @@ class TimeSeriesAugmentation:
 
         x_masked = x.clone()
 
-        # Apply masking to each sample independently
+        # Vectorized random start positions for all samples (GPU-friendly)
+        start_indices = torch.randint(0, seq_len - mask_len + 1, (batch_size,), device=x.device)
+
+        # Compute mean per channel across time dimension for all samples
+        # Shape: (batch, channels)
+        segment_means = x.mean(dim=2)
+
+        # Apply masking to each sample (vectorized where possible)
         for i in range(batch_size):
-            # Random start position for mask
-            start_idx = torch.randint(0, seq_len - mask_len + 1, (1,)).item()
-
-            # Compute mean per channel across time dimension
-            # Shape: (channels,)
-            segment_mean = x[i].mean(dim=1)
-
+            start_idx = start_indices[i].item()
             # Fill masked region with segment mean
             # Shape: (channels, mask_len)
-            x_masked[i, :, start_idx:start_idx+mask_len] = segment_mean.unsqueeze(1).expand(-1, mask_len)
+            x_masked[i, :, start_idx:start_idx+mask_len] = segment_means[i].unsqueeze(1).expand(-1, mask_len)
 
         return x_masked
 

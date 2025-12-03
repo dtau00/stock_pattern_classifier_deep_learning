@@ -127,6 +127,43 @@ class TwoStageTrainer:
         print("Starting Two-Stage Training")
         print("="*60)
 
+        # Display configuration
+        print("\n[Configuration]")
+        print("-" * 60)
+        print(f"Device: {self.device}")
+
+        # GPU memory info
+        if self.device == 'cuda':
+            total_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
+            allocated_mem = torch.cuda.memory_allocated(0) / 1e9
+            free_mem = total_mem - allocated_mem
+            print(f"GPU Memory: {allocated_mem:.2f}GB used / {total_mem:.2f}GB total ({free_mem:.2f}GB free)")
+
+        print(f"Batch Size: {self.config.training.batch_size}")
+        print(f"Mixed Precision: {self.config.training.use_mixed_precision}")
+        print(f"Pin Memory: {self.config.training.pin_memory}")
+        print(f"Preload to GPU: {self.config.training.preload_to_gpu}")
+        print(f"Num Workers: {self.config.training.num_workers}")
+
+        # Check if data is actually on GPU
+        sample_batch = next(iter(train_loader))
+        data_device = sample_batch[0].device
+        print(f"\n[Data Status]")
+        print(f"Location: {data_device.type}" + (f" (GPU {data_device.index})" if data_device.type == 'cuda' else ""))
+        data_on_gpu = data_device.type == 'cuda'
+        print(f"Preloaded: {'YES - Data already on GPU' if data_on_gpu else 'NO - Will transfer each batch'}")
+
+        if self.config.training.preload_to_gpu and not data_on_gpu:
+            print("\n[WARNING] preload_to_gpu=True but data is on CPU!")
+            print("         Data may not have fit in GPU memory.")
+
+        print("\n[Augmentation]")
+        print("-" * 60)
+        print(f"Jitter Sigma: {self.config.augmentation.jitter_sigma}")
+        print(f"Scale Range: {self.config.augmentation.scale_range}")
+        print(f"Mask %: {self.config.augmentation.mask_max_length_pct}")
+        print(f"Location: GPU (on-the-fly during training)")
+
         # Stage 1: Contrastive Pre-training
         print("\n[Stage 1] Contrastive Pre-training")
         print("-" * 60)
@@ -172,7 +209,10 @@ class TwoStageTrainer:
         best_val_loss = float('inf')
         patience_counter = 0
 
+        import time
         for epoch in range(self.config.training.max_epochs_stage1):
+            epoch_start_time = time.time()
+
             # Learning rate warm-up
             if epoch < self.config.training.lr_warmup_epochs:
                 lr = self.config.training.learning_rate * (epoch + 1) / self.config.training.lr_warmup_epochs
@@ -187,6 +227,9 @@ class TwoStageTrainer:
             # Validation
             val_loss = self._validate_stage1(val_loader)
 
+            # Calculate elapsed time
+            epoch_time = time.time() - epoch_start_time
+
             # Logging
             self.history['stage1']['train_loss'].append(train_loss)
             self.history['stage1']['val_loss'].append(val_loss)
@@ -194,7 +237,8 @@ class TwoStageTrainer:
             print(f"Epoch {epoch+1:3d}/{self.config.training.max_epochs_stage1} | "
                   f"LR: {lr:.6f} | "
                   f"Train Loss: {train_loss:.4f} | "
-                  f"Val Loss: {val_loss:.4f}")
+                  f"Val Loss: {val_loss:.4f} | "
+                  f"Time: {epoch_time:.2f}s")
 
             # Callback
             if callback is not None:
@@ -239,7 +283,10 @@ class TwoStageTrainer:
         best_cluster_loss = float('inf')
         patience_counter = 0
 
+        import time
         for epoch in range(self.config.training.max_epochs_stage2):
+            epoch_start_time = time.time()
+
             # Get lambda for current epoch
             lambda_t = self.lambda_schedule(epoch)
 
@@ -248,6 +295,9 @@ class TwoStageTrainer:
 
             # Validation
             val_metrics = self._validate_stage2(val_loader, lambda_t)
+
+            # Calculate elapsed time
+            epoch_time = time.time() - epoch_start_time
 
             # Logging
             self.history['stage2']['train_loss'].append(metrics['total_loss'])
@@ -260,7 +310,8 @@ class TwoStageTrainer:
                   f"Train: {metrics['total_loss']:.4f} | "
                   f"Val: {val_metrics['total_loss']:.4f} "
                   f"(C: {val_metrics['cluster_loss']:.4f}, "
-                  f"N: {val_metrics['contrastive_loss']:.4f})")
+                  f"N: {val_metrics['contrastive_loss']:.4f}) | "
+                  f"Time: {epoch_time:.2f}s")
 
             # Callback
             if callback is not None:
@@ -301,15 +352,17 @@ class TwoStageTrainer:
         total_loss = 0.0
 
         for batch_idx, (x,) in enumerate(train_loader):
-            x = x.to(self.device)
+            # Move to device if not already there
+            if x.device.type != self.device:
+                x = x.to(self.device, non_blocking=True)
 
-            # Create two augmented views (augmentation is fast, keep simple)
-            x1, x2 = self.augmentation(x)
-
-            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
             if scaler is not None:
                 with torch.cuda.amp.autocast():
+                    # Create two augmented views ON GPU (in autocast context)
+                    x1, x2 = self.augmentation(x)
+
                     # Forward pass through encoder and projection head
                     z1, h1 = self.model.encoder.forward_projection(x1)
                     z2, h2 = self.model.encoder.forward_projection(x2)
@@ -325,6 +378,9 @@ class TwoStageTrainer:
                 scaler.step(optimizer)
                 scaler.update()
             else:
+                # Create two augmented views ON GPU
+                x1, x2 = self.augmentation(x)
+
                 # Forward pass
                 z1, h1 = self.model.encoder.forward_projection(x1)
                 z2, h2 = self.model.encoder.forward_projection(x2)
@@ -341,10 +397,6 @@ class TwoStageTrainer:
 
             total_loss += loss.item()
 
-            # Clear cached memory periodically
-            if (batch_idx + 1) % 10 == 0 and self.device == 'cuda':
-                torch.cuda.empty_cache()
-
         return total_loss / len(train_loader)
 
     def _train_epoch_stage2(self, train_loader, optimizer, scaler, lambda_t: float) -> Dict:
@@ -355,12 +407,11 @@ class TwoStageTrainer:
         total_contrastive_loss = 0.0
 
         for batch_idx, (x,) in enumerate(train_loader):
-            x = x.to(self.device)
+            # Move to device if not already there
+            if x.device.type != self.device:
+                x = x.to(self.device, non_blocking=True)
 
-            # Create two augmented views
-            x1, x2 = self.augmentation(x)
-
-            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
             if scaler is not None:
                 with torch.cuda.amp.autocast():
@@ -370,6 +421,9 @@ class TwoStageTrainer:
 
                     # Clustering loss
                     loss_cluster = self.clustering_loss_fn(z_norm, self.model.centroids)
+
+                    # Create two augmented views ON GPU (in autocast context)
+                    x1, x2 = self.augmentation(x)
 
                     # Contrastive loss
                     z1, h1 = self.model.encoder.forward_projection(x1)
@@ -391,6 +445,9 @@ class TwoStageTrainer:
 
                 # Clustering loss
                 loss_cluster = self.clustering_loss_fn(z_norm, self.model.centroids)
+
+                # Create two augmented views ON GPU
+                x1, x2 = self.augmentation(x)
 
                 # Contrastive loss
                 z1, h1 = self.model.encoder.forward_projection(x1)
@@ -425,9 +482,11 @@ class TwoStageTrainer:
 
         with torch.no_grad():
             for (x,) in val_loader:
-                x = x.to(self.device)
+                # Move to device if not already there
+                if x.device.type != self.device:
+                    x = x.to(self.device, non_blocking=True)
 
-                # Create two augmented views
+                # Create two augmented views ON GPU
                 x1, x2 = self.augmentation(x)
 
                 # Forward pass
@@ -453,7 +512,9 @@ class TwoStageTrainer:
 
         with torch.no_grad():
             for (x,) in val_loader:
-                x = x.to(self.device)
+                # Move to device if not already there
+                if x.device.type != self.device:
+                    x = x.to(self.device, non_blocking=True)
 
                 # Get latent vectors
                 z = self.model.encoder(x)
@@ -462,7 +523,7 @@ class TwoStageTrainer:
                 # Clustering loss
                 loss_cluster = self.clustering_loss_fn(z_norm, self.model.centroids)
 
-                # Create augmented views for contrastive loss
+                # Create augmented views ON GPU for contrastive loss
                 x1, x2 = self.augmentation(x)
                 z1, h1 = self.model.encoder.forward_projection(x1)
                 z2, h2 = self.model.encoder.forward_projection(x2)
@@ -498,7 +559,9 @@ class TwoStageTrainer:
         latents = []
         with torch.no_grad():
             for (x,) in train_loader:
-                x = x.to(self.device)
+                # Move to device if not already there
+                if x.device.type != self.device:
+                    x = x.to(self.device, non_blocking=True)
                 z = self.model.encoder(x)
                 z_norm = F.normalize(z, p=2, dim=1)
                 latents.append(z_norm.cpu())

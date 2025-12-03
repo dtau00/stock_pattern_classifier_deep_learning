@@ -131,12 +131,33 @@ def show_data_loading():
                 with st.spinner("Loading data..."):
                     with h5py.File(selected_file, 'r') as f:
                         windows = f['windows'][:]
+                        # Load metadata
+                        window_metadata = json.loads(f.attrs['window_metadata'])
 
                     # Convert to torch tensor
                     windows_tensor = torch.from_numpy(windows).float()
 
                     # Transpose from (N, T, C) to (N, C, T)
                     windows_tensor = windows_tensor.permute(0, 2, 1)
+
+                    # Load OHLCV data for visualization
+                    try:
+                        with h5py.File(selected_file, 'r') as f:
+                            additional_metadata = json.loads(f.attrs['additional_metadata'])
+
+                        source_package = additional_metadata.get('source_package')
+                        if source_package:
+                            ohlcv_path = Path("data/packages") / source_package
+                            if ohlcv_path.exists():
+                                ohlcv_df = pd.read_csv(ohlcv_path)
+                                if 'timestamp' in ohlcv_df.columns:
+                                    ohlcv_df['timestamp'] = pd.to_datetime(ohlcv_df['timestamp'], unit='ms')
+                                elif 'open_time' in ohlcv_df.columns:
+                                    ohlcv_df['timestamp'] = pd.to_datetime(ohlcv_df['open_time'], unit='ms')
+                                st.session_state['ohlcv_data'] = ohlcv_df
+                                st.session_state['window_metadata'] = window_metadata
+                    except Exception as e:
+                        pass  # OHLCV data is optional
 
                     # Store in session state
                     st.session_state['data'] = windows_tensor
@@ -199,7 +220,7 @@ def show_model_configuration():
         )
         num_clusters = st.number_input(
             "Number of Clusters",
-            min_value=5, max_value=15, value=config.model.num_clusters,
+            min_value=5, max_value=1000, value=config.model.num_clusters,
             help="Number of pattern clusters to identify"
         )
 
@@ -242,7 +263,7 @@ def show_model_configuration():
         )
         batch_size = st.selectbox(
             "Batch Size",
-            options=[32,64,128, 256, 512, 1024],
+            options=[32,64,128, 256, 512, 1024, 2048, 4096, 8192, 16384],
             index=2  # 512
         )
 
@@ -260,6 +281,16 @@ def show_model_configuration():
                 "Mixed Precision (FP16)",
                 value=config.training.use_mixed_precision,
                 help="Faster training on CUDA, 50% memory reduction"
+            )
+            pin_memory = st.checkbox(
+                "Pin Memory",
+                value=config.training.pin_memory,
+                help="Enable pinned memory for faster CPU->GPU transfer"
+            )
+            preload_to_gpu = st.checkbox(
+                "Preload Dataset to GPU",
+                value=config.training.preload_to_gpu,
+                help="Load entire dataset to GPU at start (fastest but requires sufficient VRAM)"
             )
 
         with col2:
@@ -289,7 +320,9 @@ def show_model_configuration():
             learning_rate=lr,
             batch_size=batch_size,
             early_stopping_patience=early_stopping,
-            use_mixed_precision=use_mixed_precision
+            use_mixed_precision=use_mixed_precision,
+            pin_memory=pin_memory,
+            preload_to_gpu=preload_to_gpu
         ),
         augmentation=AugmentationConfig(
             jitter_sigma=jitter_sigma,
@@ -373,27 +406,54 @@ def show_training():
         val_data = data[train_size:train_size+val_size]
         test_data = data[train_size+val_size:]
 
+        # Handle GPU preloading if enabled
+        if config.training.preload_to_gpu and device == 'cuda':
+            with st.spinner("Preloading dataset to GPU..."):
+                try:
+                    # Check available GPU memory
+                    if torch.cuda.is_available():
+                        free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
+                        dataset_size = train_data.element_size() * train_data.nelement()
+                        dataset_size += val_data.element_size() * val_data.nelement()
+                        dataset_size += test_data.element_size() * test_data.nelement()
+
+                        if dataset_size > free_memory * 0.8:  # Use 80% threshold for safety
+                            st.warning(f"Dataset ({dataset_size/1e9:.2f}GB) may not fit in available GPU memory ({free_memory/1e9:.2f}GB). Falling back to standard loading.")
+                            config.training.preload_to_gpu = False
+                        else:
+                            train_data = train_data.to(device)
+                            val_data = val_data.to(device)
+                            test_data = test_data.to(device)
+                            st.success(f"✅ Dataset preloaded to GPU ({dataset_size/1e9:.2f}GB)")
+                except Exception as e:
+                    st.warning(f"Failed to preload to GPU: {e}. Falling back to standard loading.")
+                    config.training.preload_to_gpu = False
+
+        # Adjust DataLoader settings based on whether data is on GPU
+        use_pin_memory = config.training.pin_memory and not config.training.preload_to_gpu and device == 'cuda'
+        use_num_workers = 0 if config.training.preload_to_gpu else config.training.num_workers
+
         # Create data loaders
         train_loader = DataLoader(
             TensorDataset(train_data),
             batch_size=config.training.batch_size,
             shuffle=True,
-            num_workers=config.training.num_workers,
-            pin_memory=False
+            num_workers=use_num_workers,
+            pin_memory=use_pin_memory
         )
         val_loader = DataLoader(
             TensorDataset(val_data),
             batch_size=config.training.batch_size,
             shuffle=False,
-            num_workers=config.training.num_workers,
-            pin_memory=False
+            num_workers=use_num_workers,
+            pin_memory=use_pin_memory
         )
         test_loader = DataLoader(
             TensorDataset(test_data),
             batch_size=config.training.batch_size,
             shuffle=False,
-            num_workers=config.training.num_workers,
-            pin_memory=False
+            num_workers=use_num_workers,
+            pin_memory=use_pin_memory
         )
 
         # Create model
@@ -570,14 +630,115 @@ def show_evaluation():
         return
 
     model = st.session_state['model']
-    data = st.session_state['data']
 
+    # Data source selection
+    st.subheader("📊 Select Data Source")
+
+    data_source = st.radio(
+        "Choose data to evaluate:",
+        ["Training Data", "Preprocessed Package"],
+        help="Use training data or load a new preprocessed package for evaluation"
+    )
+
+    data = None
+
+    if data_source == "Training Data":
+        if 'data' not in st.session_state:
+            st.warning("⚠️ No training data found. Please load data first (Step 1)")
+            return
+        data = st.session_state['data']
+        st.info(f"Using training data: {len(data):,} samples")
+
+    else:  # Preprocessed Package
+        # File selection
+        data_dir = Path("data/preprocessed")
+        if not data_dir.exists():
+            st.warning("No preprocessed data directory found.")
+            st.info("📁 Expected directory: `data/preprocessed/`")
+            return
+
+        # Get available HDF5 files
+        hdf5_files = list(data_dir.glob("*.h5"))
+
+        if not hdf5_files:
+            st.warning("No HDF5 files found in data/preprocessed/")
+            st.info("💡 Run the preprocessing pipeline first (Page 20)")
+            return
+
+        # File selector
+        selected_file = st.selectbox(
+            "Select preprocessed package:",
+            options=hdf5_files,
+            format_func=lambda x: x.name,
+            key="eval_package_selector"
+        )
+
+        if selected_file:
+            try:
+                # Load data info
+                with h5py.File(selected_file, 'r') as f:
+                    n_samples = f['windows'].shape[0]
+                    seq_len = f['windows'].shape[1]
+                    n_channels = f['windows'].shape[2]
+
+                    # Get metadata
+                    metadata = {}
+                    if 'window_metadata' in f.attrs:
+                        metadata = json.loads(f.attrs['window_metadata'])
+                    elif 'metadata' in f.attrs:
+                        metadata = json.loads(f.attrs['metadata'])
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Samples", f"{n_samples:,}")
+                with col2:
+                    st.metric("Sequence Length", seq_len)
+                with col3:
+                    st.metric("Channels", n_channels)
+
+                # Load button
+                if st.button("Load Package for Evaluation", type="primary", key="load_eval_package"):
+                    with st.spinner("Loading package..."):
+                        with h5py.File(selected_file, 'r') as f:
+                            windows = f['windows'][:]
+
+                        # Convert to torch tensor
+                        windows_tensor = torch.from_numpy(windows).float()
+
+                        # Transpose from (N, T, C) to (N, C, T)
+                        windows_tensor = windows_tensor.permute(0, 2, 1)
+
+                        # Store temporarily for evaluation
+                        st.session_state['eval_data'] = windows_tensor
+                        st.session_state['eval_package_name'] = selected_file.name
+
+                        st.success(f"✅ Loaded {n_samples:,} windows from {selected_file.name}")
+                        st.rerun()
+
+                # Use loaded evaluation data if available
+                if 'eval_data' in st.session_state:
+                    data = st.session_state['eval_data']
+                    st.info(f"Using package: {st.session_state['eval_package_name']} ({len(data):,} samples)")
+                else:
+                    return  # Wait for user to load the package
+
+            except Exception as e:
+                st.error(f"Error loading file: {e}")
+                return
+
+    if data is None:
+        return
+
+    st.divider()
     st.subheader("🎯 Cluster Analysis")
 
     # Get predictions
     with st.spinner("Computing predictions..."):
         model.eval()
         with torch.no_grad():
+            # Move data to same device as model
+            device = next(model.parameters()).device
+            data = data.to(device)
             z_norm, cluster_ids = model(data)
 
         cluster_ids = cluster_ids.cpu().numpy()

@@ -35,7 +35,7 @@ class ModelConfig:
             f"input_channels must be in [1, 10], got {self.input_channels}"
         assert 32 <= self.d_z <= 256, \
             f"d_z must be in [32, 256], got {self.d_z}"
-        assert 5 <= self.num_clusters <= 15, \
+        assert 5 <= self.num_clusters <= 1000, \
             f"num_clusters must be in [5, 15], got {self.num_clusters}"
         assert 0.1 <= self.tau <= 1.0, \
             f"tau must be in [0.1, 1.0], got {self.tau}"
@@ -60,8 +60,10 @@ class TrainingConfig:
         num_workers: Dataloader workers (default: 4)
         lr_warmup_epochs: LR warm-up epochs for Stage 1 (default: 5)
         stage2_lr_factor: LR multiplier for Stage 2 (default: 0.1)
+        pin_memory: Enable pin_memory for DataLoader (default: False)
+        preload_to_gpu: Load entire dataset to GPU at start (default: False)
     """
-    batch_size: int = 128
+    batch_size: int = 256
     learning_rate: float = 0.001
     max_epochs_stage1: int = 50
     max_epochs_stage2: int = 50
@@ -74,11 +76,13 @@ class TrainingConfig:
     num_workers: int = 0
     lr_warmup_epochs: int = 5
     stage2_lr_factor: float = 0.1
+    pin_memory: bool = False
+    preload_to_gpu: bool = False
 
     def __post_init__(self):
         """Validate configuration parameters."""
-        assert 32 <= self.batch_size <= 1024, \
-            f"batch_size must be in [32, 1024], got {self.batch_size}"
+        assert 32 <= self.batch_size <= 16384, \
+            f"batch_size must be in [32, 16384], got {self.batch_size}"
         assert 0.0001 <= self.learning_rate <= 0.01, \
             f"learning_rate must be in [0.0001, 0.01], got {self.learning_rate}"
         assert 20 <= self.max_epochs_stage1 <= 100, \

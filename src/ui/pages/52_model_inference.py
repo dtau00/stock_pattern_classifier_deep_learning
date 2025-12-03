@@ -18,6 +18,7 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime
 import h5py
+import json
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 
@@ -27,6 +28,138 @@ project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.models.ucl_tsc_model import UCLTSCModel
+
+
+def load_ohlcv_data_from_metadata(uploaded_file):
+    """
+    Load the original OHLCV data that corresponds to the preprocessed windows.
+
+    Args:
+        uploaded_file: The uploaded HDF5 file or file path
+
+    Returns:
+        DataFrame with OHLCV data and timestamps, or None if not found
+    """
+    try:
+        # Read metadata from HDF5
+        if isinstance(uploaded_file, str):
+            file_to_open = uploaded_file
+        else:
+            file_to_open = uploaded_file
+
+        with h5py.File(file_to_open, 'r') as f:
+            additional_metadata = json.loads(f.attrs['additional_metadata'])
+
+        # Extract info
+        source_package = additional_metadata.get('source_package')
+        symbol = additional_metadata.get('symbol')
+        interval = additional_metadata.get('interval')
+
+        if not source_package:
+            return None
+
+        # Try to find the source OHLCV file
+        ohlcv_path = Path("data/packages") / source_package
+
+        if not ohlcv_path.exists():
+            st.warning(f"Source OHLCV file not found: {ohlcv_path}")
+            return None
+
+        # Load OHLCV data
+        df = pd.read_csv(ohlcv_path)
+
+        # Convert timestamp column to datetime
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        elif 'open_time' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['open_time'], unit='ms')
+
+        return df
+
+    except Exception as e:
+        st.error(f"Error loading OHLCV data: {e}")
+        return None
+
+
+def get_window_ohlcv(ohlcv_df, start_timestamp, end_timestamp):
+    """
+    Extract OHLCV data for a specific window based on timestamps.
+
+    Args:
+        ohlcv_df: DataFrame with OHLCV data and timestamps
+        start_timestamp: Start timestamp in milliseconds
+        end_timestamp: End timestamp in milliseconds
+
+    Returns:
+        DataFrame slice with OHLCV data for the window
+    """
+    # Convert timestamps to datetime
+    start_dt = pd.to_datetime(start_timestamp, unit='ms')
+    end_dt = pd.to_datetime(end_timestamp, unit='ms')
+
+    # Filter data
+    mask = (ohlcv_df['timestamp'] >= start_dt) & (ohlcv_df['timestamp'] <= end_dt)
+    return ohlcv_df[mask]
+
+
+def create_candlestick_chart(window_ohlcv, cluster_id, window_idx):
+    """
+    Create a candlestick chart from OHLCV data.
+
+    Args:
+        window_ohlcv: DataFrame with OHLCV data
+        cluster_id: Cluster ID for the title
+        window_idx: Window index for the title
+
+    Returns:
+        Plotly figure with candlestick chart
+    """
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.7, 0.3],
+        subplot_titles=('Price', 'Volume')
+    )
+
+    # Candlestick chart
+    fig.add_trace(
+        go.Candlestick(
+            x=window_ohlcv['timestamp'],
+            open=window_ohlcv['open'],
+            high=window_ohlcv['high'],
+            low=window_ohlcv['low'],
+            close=window_ohlcv['close'],
+            name='OHLC'
+        ),
+        row=1, col=1
+    )
+
+    # Volume bars
+    colors = ['red' if close < open else 'green'
+              for close, open in zip(window_ohlcv['close'], window_ohlcv['open'])]
+
+    fig.add_trace(
+        go.Bar(
+            x=window_ohlcv['timestamp'],
+            y=window_ohlcv['volume'],
+            name='Volume',
+            marker_color=colors,
+            showlegend=False
+        ),
+        row=2, col=1
+    )
+
+    fig.update_layout(
+        title=f"Window {window_idx} - Cluster {cluster_id}",
+        xaxis_rangeslider_visible=False,
+        height=500,
+        xaxis2_title="Time",
+        yaxis_title="Price",
+        yaxis2_title="Volume"
+    )
+
+    return fig
 
 
 def main():
@@ -141,13 +274,26 @@ def show_pattern_classification():
             try:
                 with h5py.File(uploaded_file, 'r') as f:
                     windows = f['windows'][:]
+                    # Load metadata
+                    window_metadata = json.loads(f.attrs['window_metadata'])
 
                 # Convert to torch tensor
                 data = torch.from_numpy(windows).float()
                 # Transpose from (N, T, C) to (N, C, T)
                 data = data.permute(0, 2, 1)
 
-                st.success(f"✅ Loaded {len(data):,} windows")
+                # Load corresponding OHLCV data
+                ohlcv_df = load_ohlcv_data_from_metadata(uploaded_file)
+
+                # Store metadata and OHLCV data
+                st.session_state['window_metadata'] = window_metadata
+                st.session_state['ohlcv_data'] = ohlcv_df
+                st.session_state['uploaded_file_path'] = uploaded_file
+
+                if ohlcv_df is not None:
+                    st.success(f"✅ Loaded {len(data):,} windows with OHLCV data")
+                else:
+                    st.success(f"✅ Loaded {len(data):,} windows (OHLCV data not found)")
             except Exception as e:
                 st.error(f"Error loading file: {e}")
                 return
@@ -328,6 +474,9 @@ def show_cluster_details(cluster_id, cluster_ids, data):
     mask = cluster_ids == cluster_id
     cluster_data = data[mask]
 
+    # Get indices in the original data
+    original_indices = np.where(mask)[0]
+
     st.markdown(f"### Cluster {cluster_id}")
 
     # Show sample windows
@@ -336,28 +485,61 @@ def show_cluster_details(cluster_id, cluster_ids, data):
 
     st.markdown(f"**Sample Windows** (showing {n_samples} random windows)")
 
+    # Check if OHLCV data is available
+    has_ohlcv = ('ohlcv_data' in st.session_state and
+                 st.session_state['ohlcv_data'] is not None and
+                 'window_metadata' in st.session_state)
+
     for i, idx in enumerate(sample_indices):
         window = cluster_data[idx].cpu().numpy()  # Shape: (C, T)
+        original_idx = original_indices[idx]
 
         with st.expander(f"Sample {i+1}", expanded=(i == 0)):
-            # Plot the window
-            fig = go.Figure()
+            # Try to show OHLCV candlestick chart
+            if has_ohlcv:
+                try:
+                    # Get metadata for this window
+                    window_meta = st.session_state['window_metadata'][original_idx]
+                    start_ts = window_meta.get('start_timestamp')
+                    end_ts = window_meta.get('end_timestamp')
 
-            channel_names = ['Returns', 'Volume/OBV', 'Volatility/NATR']
-            for c in range(window.shape[0]):
-                fig.add_trace(go.Scatter(
-                    y=window[c],
-                    name=channel_names[c],
-                    mode='lines'
-                ))
+                    if start_ts and end_ts:
+                        # Get OHLCV data for this window
+                        ohlcv_df = st.session_state['ohlcv_data']
+                        window_ohlcv = get_window_ohlcv(ohlcv_df, start_ts, end_ts)
 
-            fig.update_layout(
-                title=f"Window {idx} - Cluster {cluster_id}",
-                xaxis_title="Time Step",
-                yaxis_title="Normalized Value",
-                height=300
-            )
-            st.plotly_chart(fig, use_container_width=True)
+                        if len(window_ohlcv) > 0:
+                            # Create and display candlestick chart
+                            fig = create_candlestick_chart(window_ohlcv, cluster_id, original_idx)
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.warning("No OHLCV data found for this window's time range")
+                            has_ohlcv = False
+                    else:
+                        has_ohlcv = False
+                except Exception as e:
+                    st.error(f"Error loading OHLCV data: {e}")
+                    has_ohlcv = False
+
+            # Fallback: show normalized features as line chart
+            if not has_ohlcv:
+                fig = go.Figure()
+
+                channel_names = ['Returns', 'Volume/OBV', 'Volatility/NATR']
+                for c in range(window.shape[0]):
+                    fig.add_trace(go.Scatter(
+                        y=window[c],
+                        name=channel_names[c],
+                        mode='lines'
+                    ))
+
+                fig.update_layout(
+                    title=f"Window {original_idx} - Cluster {cluster_id} (Normalized Features)",
+                    xaxis_title="Time Step",
+                    yaxis_title="Normalized Value",
+                    height=300
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
 
 def show_latent_space_visualization():
