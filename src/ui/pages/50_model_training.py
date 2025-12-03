@@ -470,9 +470,6 @@ def show_training():
             progress_bar.progress(1.0)
             st.success("🎉 Training Complete!")
 
-            # Show final metrics
-            show_training_results(history)
-
         except Exception as e:
             st.error(f"Training failed: {e}")
             st.exception(e)
@@ -536,7 +533,7 @@ def show_training_results(history):
     fig.update_yaxes(title_text="Loss")
     fig.update_layout(height=600, showlegend=True)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch', key='training_losses_chart')
 
     # Summary metrics
     col1, col2, col3, col4 = st.columns(4)
@@ -607,7 +604,7 @@ def show_evaluation():
             xaxis_title="Cluster ID",
             yaxis_title="Number of Samples"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch', key='cluster_distribution_chart')
 
     # Save predictions
     if st.button("💾 Save Predictions"):
