@@ -86,19 +86,30 @@ class TimeSeriesAugmentation:
         Returns:
             Augmented tensor of shape (batch, channels, seq_len)
         """
-        x_aug = x.clone()
+        # Optimize: only clone when necessary (time_mask needs it)
+        # Jitter and scale can work in-place on the clone
 
-        # Apply jittering
+        # Start with original (will be modified in-place)
+        x_aug = x
+
+        # Apply jittering (creates new tensor via addition)
         if self.apply_jitter:
             x_aug = self._jitter(x_aug)
 
-        # Apply scaling
+        # Apply scaling (in-place multiplication if we already have a copy from jitter)
         if self.apply_scaling:
             x_aug = self._scale(x_aug)
 
-        # Apply time masking
+        # Apply time masking (needs clone to preserve structure)
         if self.apply_masking:
+            # Only clone here if we haven't already created a copy
+            if not self.apply_jitter and not self.apply_scaling:
+                x_aug = x.clone()
             x_aug = self._time_mask(x_aug)
+
+        # If no augmentations were applied, clone to ensure we don't modify original
+        if not (self.apply_jitter or self.apply_scaling or self.apply_masking):
+            x_aug = x.clone()
 
         return x_aug
 
@@ -157,7 +168,8 @@ class TimeSeriesAugmentation:
         if mask_len == 0:
             return x
 
-        x_masked = x.clone()
+        # Work directly on x (caller has already cloned if needed)
+        x_masked = x
 
         # Vectorized random start positions for all samples (GPU-friendly)
         start_indices = torch.randint(0, seq_len - mask_len + 1, (batch_size,), device=x.device)
@@ -166,12 +178,21 @@ class TimeSeriesAugmentation:
         # Shape: (batch, channels)
         segment_means = x.mean(dim=2)
 
-        # Apply masking to each sample (vectorized where possible)
-        for i in range(batch_size):
-            start_idx = start_indices[i].item()
-            # Fill masked region with segment mean
-            # Shape: (channels, mask_len)
-            x_masked[i, :, start_idx:start_idx+mask_len] = segment_means[i].unsqueeze(1).expand(-1, mask_len)
+        # Fully vectorized masking (NO CPU sync)
+        # Create mask tensor on GPU
+        mask = torch.zeros_like(x, dtype=torch.bool)
+
+        # Build mask indices using advanced indexing (stays on GPU)
+        batch_idx = torch.arange(batch_size, device=x.device).unsqueeze(1)  # (batch, 1)
+        time_offsets = torch.arange(mask_len, device=x.device).unsqueeze(0)  # (1, mask_len)
+        masked_positions = start_indices.unsqueeze(1) + time_offsets  # (batch, mask_len)
+
+        # Set mask positions
+        mask[batch_idx, :, masked_positions] = True
+
+        # Apply masking: keep original where False, use mean where True
+        segment_means_expanded = segment_means.unsqueeze(2).expand(-1, -1, seq_len)
+        x_masked = torch.where(mask, segment_means_expanded, x_masked)
 
         return x_masked
 

@@ -70,6 +70,20 @@ class TwoStageTrainer:
         # Move model to device
         self.model.to(self.device)
 
+        # Convert to channels-last if requested (better cache locality for CNNs)
+        if config.training.use_channels_last and self.device == 'cuda':
+            self.model = self.model.to(memory_format=torch.channels_last)
+            print(f"[Optimization] Using channels-last memory format")
+
+        # Compile model with torch.compile() if available and requested
+        if config.training.use_torch_compile and hasattr(torch, 'compile'):
+            print(f"[Optimization] Compiling model with mode='{config.training.compile_mode}'")
+            try:
+                self.model = torch.compile(self.model, mode=config.training.compile_mode)
+                print(f"[Optimization] Model compiled successfully")
+            except Exception as e:
+                print(f"[Warning] Model compilation failed: {e}. Continuing without compilation.")
+
         # Loss functions
         self.contrastive_loss_fn = NTXentLoss(temperature=config.model.tau)
         self.clustering_loss_fn = ClusteringLoss(alpha=1.0)
@@ -197,11 +211,21 @@ class TwoStageTrainer:
     def _train_stage1(self, train_loader: DataLoader, val_loader: DataLoader, callback=None):
         """Stage 1: Contrastive pre-training."""
 
-        # Optimizer with LR warm-up
-        optimizer = torch.optim.Adam(
-            self.model.parameters(),
-            lr=self.config.training.learning_rate
-        )
+        # Optimizer with LR warm-up (use fused kernels if available and requested)
+        use_fused = self.config.training.use_fused_optimizer and self.device == 'cuda'
+        optimizer_kwargs = {'lr': self.config.training.learning_rate}
+
+        # Try to use fused optimizer (requires PyTorch 2.0+)
+        if use_fused:
+            try:
+                optimizer = torch.optim.Adam(self.model.parameters(), fused=True, **optimizer_kwargs)
+                print(f"[Optimization] Using fused Adam optimizer")
+            except TypeError:
+                # Fused not available, fall back to standard
+                optimizer = torch.optim.Adam(self.model.parameters(), **optimizer_kwargs)
+                print(f"[Info] Fused optimizer not available (requires PyTorch 2.0+), using standard Adam")
+        else:
+            optimizer = torch.optim.Adam(self.model.parameters(), **optimizer_kwargs)
 
         # Mixed precision scaler (only on CUDA)
         scaler = torch.cuda.amp.GradScaler() if (self.config.training.use_mixed_precision and self.device == 'cuda') else None
@@ -270,12 +294,20 @@ class TwoStageTrainer:
     def _train_stage2(self, train_loader: DataLoader, val_loader: DataLoader, callback=None):
         """Stage 2: Joint fine-tuning."""
 
-        # Optimizer with reduced learning rate
+        # Optimizer with reduced learning rate (use fused kernels if available and requested)
         lr_stage2 = self.config.training.learning_rate * self.config.training.stage2_lr_factor
-        optimizer = torch.optim.Adam(
-            self.model.parameters(),
-            lr=lr_stage2
-        )
+        use_fused = self.config.training.use_fused_optimizer and self.device == 'cuda'
+        optimizer_kwargs = {'lr': lr_stage2}
+
+        # Try to use fused optimizer (requires PyTorch 2.0+)
+        if use_fused:
+            try:
+                optimizer = torch.optim.Adam(self.model.parameters(), fused=True, **optimizer_kwargs)
+            except TypeError:
+                # Fused not available, fall back to standard
+                optimizer = torch.optim.Adam(self.model.parameters(), **optimizer_kwargs)
+        else:
+            optimizer = torch.optim.Adam(self.model.parameters(), **optimizer_kwargs)
 
         # Mixed precision scaler (only on CUDA)
         scaler = torch.cuda.amp.GradScaler() if (self.config.training.use_mixed_precision and self.device == 'cuda') else None
@@ -356,6 +388,10 @@ class TwoStageTrainer:
             if x.device.type != self.device:
                 x = x.to(self.device, non_blocking=True)
 
+            # Convert to channels-last if enabled
+            if self.config.training.use_channels_last and self.device == 'cuda':
+                x = x.to(memory_format=torch.channels_last)
+
             optimizer.zero_grad(set_to_none=True)
 
             if scaler is not None:
@@ -410,6 +446,10 @@ class TwoStageTrainer:
             # Move to device if not already there
             if x.device.type != self.device:
                 x = x.to(self.device, non_blocking=True)
+
+            # Convert to channels-last if enabled
+            if self.config.training.use_channels_last and self.device == 'cuda':
+                x = x.to(memory_format=torch.channels_last)
 
             optimizer.zero_grad(set_to_none=True)
 

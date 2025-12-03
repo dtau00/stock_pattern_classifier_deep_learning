@@ -66,6 +66,12 @@ class TrainingConfig:
         stage2_lr_factor: LR multiplier for Stage 2 (default: 0.1)
         pin_memory: Enable pin_memory for DataLoader (default: False)
         preload_to_gpu: Load entire dataset to GPU at start (default: False)
+        persistent_workers: Keep workers alive between epochs (default: False)
+        prefetch_factor: Batches to prefetch per worker (default: 2)
+        use_fused_optimizer: Use fused Adam optimizer kernels (default: True)
+        use_torch_compile: Compile model with torch.compile() (default: True)
+        compile_mode: Compilation mode - 'default', 'reduce-overhead', or 'max-autotune' (default: 'default')
+        use_channels_last: Use channels-last memory format for better cache locality (default: False)
     """
     batch_size: int = 256
     learning_rate: float = 0.001
@@ -82,6 +88,12 @@ class TrainingConfig:
     stage2_lr_factor: float = 0.1
     pin_memory: bool = False
     preload_to_gpu: bool = False
+    persistent_workers: bool = False
+    prefetch_factor: int = 2
+    use_fused_optimizer: bool = True
+    use_torch_compile: bool = True
+    compile_mode: str = 'default'
+    use_channels_last: bool = False
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -105,6 +117,10 @@ class TrainingConfig:
             f"gradient_accumulation_steps must be in [1, 8], got {self.gradient_accumulation_steps}"
         assert 0 <= self.num_workers <= 8, \
             f"num_workers must be in [0, 8], got {self.num_workers}"
+        assert 2 <= self.prefetch_factor <= 10, \
+            f"prefetch_factor must be in [2, 10], got {self.prefetch_factor}"
+        assert self.compile_mode in ['default', 'reduce-overhead', 'max-autotune'], \
+            f"compile_mode must be 'default', 'reduce-overhead', or 'max-autotune', got {self.compile_mode}"
 
 
 @dataclass
@@ -285,7 +301,7 @@ def test_config():
     print("\n[Test 2] Small configuration")
     config_small = get_small_config()
     assert config_small.model.d_z == 64
-    assert config_small.training.batch_size == 128
+    assert config_small.training.batch_size == 64
     print(f"  [PASS] Small config: d_z={config_small.model.d_z}, batch={config_small.training.batch_size}")
 
     # Test 3: Large config
@@ -315,7 +331,7 @@ def test_config():
         print(f"  [PASS] Correctly rejected invalid d_z: {e}")
 
     try:
-        invalid_config = TrainingConfig(batch_size=50)  # Too small
+        invalid_config = TrainingConfig(batch_size=16)  # Too small
         print(f"  [FAIL] Should have raised assertion error")
         assert False
     except AssertionError as e:

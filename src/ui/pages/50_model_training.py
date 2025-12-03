@@ -280,6 +280,21 @@ def show_model_configuration():
                 "Early Stopping Patience",
                 min_value=5, max_value=20, value=config.training.early_stopping_patience
             )
+            num_workers = st.number_input(
+                "DataLoader Workers",
+                min_value=0, max_value=8, value=config.training.num_workers,
+                help="Number of subprocesses for data loading (0=main process only)"
+            )
+            persistent_workers = st.checkbox(
+                "Persistent Workers",
+                value=config.training.persistent_workers,
+                help="Keep workers alive between epochs (reduces overhead when num_workers > 0)"
+            )
+            prefetch_factor = st.number_input(
+                "Prefetch Factor",
+                min_value=2, max_value=10, value=config.training.prefetch_factor,
+                help="Number of batches to prefetch per worker (only when num_workers > 0)"
+            )
             use_mixed_precision = st.checkbox(
                 "Mixed Precision (FP16)",
                 value=config.training.use_mixed_precision,
@@ -294,6 +309,28 @@ def show_model_configuration():
                 "Preload Dataset to GPU",
                 value=config.training.preload_to_gpu,
                 help="Load entire dataset to GPU at start (fastest but requires sufficient VRAM)"
+            )
+            st.markdown("**Advanced Optimizations (PyTorch 2.0+)**")
+            use_fused_optimizer = st.checkbox(
+                "Fused Optimizer",
+                value=config.training.use_fused_optimizer,
+                help="Use fused CUDA kernels for Adam optimizer (5-10% speedup)"
+            )
+            use_torch_compile = st.checkbox(
+                "Compile Model (torch.compile)",
+                value=config.training.use_torch_compile,
+                help="JIT compile model with PyTorch 2.0+ (20-40% speedup, requires first-epoch warmup)"
+            )
+            compile_mode = st.selectbox(
+                "Compile Mode",
+                options=['default', 'reduce-overhead', 'max-autotune'],
+                index=0,
+                help="default=balanced, reduce-overhead=faster startup, max-autotune=best performance"
+            )
+            use_channels_last = st.checkbox(
+                "Channels-Last Memory",
+                value=config.training.use_channels_last,
+                help="Better cache locality for CNNs (5-15% speedup on modern GPUs)"
             )
 
         with col2:
@@ -323,9 +360,16 @@ def show_model_configuration():
             learning_rate=lr,
             batch_size=batch_size,
             early_stopping_patience=early_stopping,
+            num_workers=num_workers,
+            persistent_workers=persistent_workers,
+            prefetch_factor=prefetch_factor,
             use_mixed_precision=use_mixed_precision,
             pin_memory=pin_memory,
-            preload_to_gpu=preload_to_gpu
+            preload_to_gpu=preload_to_gpu,
+            use_fused_optimizer=use_fused_optimizer,
+            use_torch_compile=use_torch_compile,
+            compile_mode=compile_mode,
+            use_channels_last=use_channels_last
         ),
         augmentation=AugmentationConfig(
             jitter_sigma=jitter_sigma,
@@ -435,28 +479,34 @@ def show_training():
         # Adjust DataLoader settings based on whether data is on GPU
         use_pin_memory = config.training.pin_memory and not config.training.preload_to_gpu and device == 'cuda'
         use_num_workers = 0 if config.training.preload_to_gpu else config.training.num_workers
+        use_persistent_workers = config.training.persistent_workers and use_num_workers > 0
+        use_prefetch_factor = config.training.prefetch_factor if use_num_workers > 0 else None
 
         # Create data loaders
+        # Build DataLoader kwargs (exclude prefetch_factor if None to avoid PyTorch error)
+        dataloader_kwargs = {
+            'batch_size': config.training.batch_size,
+            'num_workers': use_num_workers,
+            'pin_memory': use_pin_memory,
+            'persistent_workers': use_persistent_workers
+        }
+        if use_prefetch_factor is not None:
+            dataloader_kwargs['prefetch_factor'] = use_prefetch_factor
+
         train_loader = DataLoader(
             TensorDataset(train_data),
-            batch_size=config.training.batch_size,
             shuffle=True,
-            num_workers=use_num_workers,
-            pin_memory=use_pin_memory
+            **dataloader_kwargs
         )
         val_loader = DataLoader(
             TensorDataset(val_data),
-            batch_size=config.training.batch_size,
             shuffle=False,
-            num_workers=use_num_workers,
-            pin_memory=use_pin_memory
+            **dataloader_kwargs
         )
         test_loader = DataLoader(
             TensorDataset(test_data),
-            batch_size=config.training.batch_size,
             shuffle=False,
-            num_workers=use_num_workers,
-            pin_memory=use_pin_memory
+            **dataloader_kwargs
         )
 
         # Create model
