@@ -22,12 +22,14 @@ class ModelConfig:
         num_clusters: Number of clusters for clustering head (default: 8)
         use_hybrid_encoder: If True, use 3 encoders; else 2 (default: False)
         tau: Temperature for NT-Xent loss (default: 0.5)
+        seq_length: Sequence length for windows (default: 127)
     """
     input_channels: int = 3
     d_z: int = 128
     num_clusters: int = 8
     use_hybrid_encoder: bool = False
     tau: float = 0.5
+    seq_length: int = 127
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -39,6 +41,8 @@ class ModelConfig:
             f"num_clusters must be in [5, 15], got {self.num_clusters}"
         assert 0.1 <= self.tau <= 1.0, \
             f"tau must be in [0.1, 1.0], got {self.tau}"
+        assert 5 <= self.seq_length <= 512, \
+            f"seq_length must be in [5, 512], got {self.seq_length}"
 
 
 @dataclass

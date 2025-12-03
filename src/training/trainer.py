@@ -625,11 +625,13 @@ def test_trainer():
 
     # Create model
     print("\n[Test 2] Creating model")
+    seq_len = train_loader.dataset.tensors[0].shape[2]
     model = UCLTSCModel(
         input_channels=3,
         d_z=config.model.d_z,
         num_clusters=config.model.num_clusters,
-        use_hybrid_encoder=False
+        use_hybrid_encoder=False,
+        seq_length=seq_len
     )
     print(f"  Model created with {sum(p.numel() for p in model.parameters()):,} parameters")
 

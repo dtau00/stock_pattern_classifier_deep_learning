@@ -4,9 +4,9 @@ Multi-View Feature Encoders for Time Series
 This module implements three specialized encoders that capture patterns at different
 temporal scales:
 
-1. ResidualSpatialEncoder (CNN) - Local patterns (10-20 bars, RF=13)
-2. TCNTemporalEncoder - Long-term dependencies (full 127-bar context, RF=127)
-3. CNNTCNHybridEncoder - Intermediate patterns (~40 bars, RF=39)
+1. ResidualSpatialEncoder (CNN) - Local patterns
+2. TCNTemporalEncoder - Long-term dependencies (full sequence context)
+3. CNNTCNHybridEncoder - Intermediate patterns
 
 All encoders use:
 - Causal convolutions (no future leakage)
@@ -20,6 +20,7 @@ Reference: Implementation Guide Section 2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import List
 
 try:
     from .causal_conv import CausalConv1d
@@ -27,32 +28,81 @@ except ImportError:
     from causal_conv import CausalConv1d
 
 
+def calculate_tcn_dilations(seq_length: int, kernel_size: int = 3, min_layers: int = 2) -> List[int]:
+    """
+    Calculate optimal TCN dilation factors to match sequence length receptive field.
+
+    Formula: RF = 1 + sum((k-1) * d for each dilation d)
+
+    Args:
+        seq_length: Target sequence length
+        kernel_size: Convolution kernel size (default: 3)
+        min_layers: Minimum number of layers (default: 2)
+
+    Returns:
+        List of dilation factors [1, 2, 4, ...]
+    """
+    dilations = []
+    current_rf = 1
+    dilation = 1
+
+    while current_rf < seq_length or len(dilations) < min_layers:
+        dilations.append(dilation)
+        current_rf += (kernel_size - 1) * dilation
+        dilation *= 2
+
+        if len(dilations) >= 10:
+            break
+
+    return dilations
+
+
+def calculate_hybrid_config(seq_length: int) -> dict:
+    """
+    Calculate optimal CNN-TCN hybrid configuration for intermediate scale.
+
+    Target: ~30% of sequence length receptive field
+
+    Args:
+        seq_length: Target sequence length
+
+    Returns:
+        Dict with 'cnn_layers' and 'tcn_dilations'
+    """
+    target_rf = max(3, int(seq_length * 0.3))
+
+    if seq_length <= 10:
+        return {'cnn_layers': 1, 'tcn_dilations': [1]}
+    elif seq_length <= 30:
+        return {'cnn_layers': 2, 'tcn_dilations': [1, 2]}
+    elif seq_length <= 80:
+        return {'cnn_layers': 2, 'tcn_dilations': [1, 2, 4]}
+    else:
+        return {'cnn_layers': 2, 'tcn_dilations': [1, 2, 4, 8]}
+
+
 class ResidualSpatialEncoder(nn.Module):
     """
     Residual Spatial Encoder (CNN) for local, high-frequency patterns.
 
-    Captures short-term patterns using 3 convolutional layers with residual
-    connections. Designed for patterns spanning 10-20 bars.
-
-    Architecture:
-        - 3 layers, kernel=5, dilation=1, filters=64
-        - LayerNorm after each convolution
-        - ReLU activation
-        - Receptive field: 13 bars
-        - Final time step pooling (t=T only)
-        - Projection to D_z
+    Captures short-term patterns using convolutional layers with residual
+    connections. Architecture scales based on sequence length.
 
     Args:
         input_channels (int): Number of input feature channels (default: 3)
         d_z (int): Latent dimension for output (default: 128)
+        seq_length (int): Sequence length (default: 127)
 
     Shape:
-        - Input: (batch, 3, 127)
+        - Input: (batch, input_channels, seq_length)
         - Output: (batch, d_z)
     """
 
-    def __init__(self, input_channels: int = 3, d_z: int = 128):
+    def __init__(self, input_channels: int = 3, d_z: int = 128, seq_length: int = 127):
         super().__init__()
+
+        self.seq_length = seq_length
+        num_layers = 3 if seq_length >= 15 else 2
 
         # Convolutional layers
         self.conv1 = CausalConv1d(input_channels, 64, kernel_size=5, dilation=1)
@@ -61,8 +111,11 @@ class ResidualSpatialEncoder(nn.Module):
         self.conv2 = CausalConv1d(64, 64, kernel_size=5, dilation=1)
         self.ln2 = nn.LayerNorm(64)
 
-        self.conv3 = CausalConv1d(64, 64, kernel_size=5, dilation=1)
-        self.ln3 = nn.LayerNorm(64)
+        self.conv3 = None
+        self.ln3 = None
+        if num_layers >= 3:
+            self.conv3 = CausalConv1d(64, 64, kernel_size=5, dilation=1)
+            self.ln3 = nn.LayerNorm(64)
 
         # Projection to latent space
         self.projection = nn.Linear(64, d_z)
@@ -72,26 +125,27 @@ class ResidualSpatialEncoder(nn.Module):
 
         # Store parameters
         self.d_z = d_z
-        self.receptive_field = 13  # 1 + 3*(5-1)*1 = 13
+        self.num_layers = num_layers
+        self.receptive_field = 1 + num_layers * (5 - 1) * 1
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass with residual connections.
 
         Args:
-            x: Input tensor of shape (batch, 3, 127)
+            x: Input tensor of shape (batch, channels, seq_length)
 
         Returns:
             Latent vector z_spatial of shape (batch, d_z)
         """
-        # Layer 1: (batch, 3, 127) -> (batch, 64, 127)
+        # Layer 1
         h1 = self.conv1(x)
-        h1 = h1.transpose(1, 2)  # (batch, 127, 64) for LayerNorm
+        h1 = h1.transpose(1, 2)
         h1 = self.ln1(h1)
-        h1 = h1.transpose(1, 2)  # (batch, 64, 127)
+        h1 = h1.transpose(1, 2)
         h1 = self.relu(h1)
 
-        # Layer 2: (batch, 64, 127) -> (batch, 64, 127)
+        # Layer 2
         h2 = self.conv2(h1)
         h2 = h2.transpose(1, 2)
         h2 = self.ln2(h2)
@@ -101,22 +155,21 @@ class ResidualSpatialEncoder(nn.Module):
         # Add residual connection from h1
         h2 = h2 + h1
 
-        # Layer 3: (batch, 64, 127) -> (batch, 64, 127)
-        h3 = self.conv3(h2)
-        h3 = h3.transpose(1, 2)
-        h3 = self.ln3(h3)
-        h3 = h3.transpose(1, 2)
-        h3 = self.relu(h3)
+        # Layer 3 (optional)
+        if self.conv3 is not None:
+            h3 = self.conv3(h2)
+            h3 = h3.transpose(1, 2)
+            h3 = self.ln3(h3)
+            h3 = h3.transpose(1, 2)
+            h3 = self.relu(h3)
 
-        # Add residual connection from h2
-        h3 = h3 + h2
-
-        # Final Time Step Pooling: Extract ONLY t=T (last timestep)
-        # Shape: (batch, 64, 127) -> (batch, 64)
-        h_final = h3[:, :, -1]
+            # Add residual connection from h2
+            h3 = h3 + h2
+            h_final = h3[:, :, -1]
+        else:
+            h_final = h2[:, :, -1]
 
         # Project to latent dimension
-        # Shape: (batch, 64) -> (batch, d_z)
         z_spatial = self.projection(h_final)
 
         return z_spatial
@@ -130,31 +183,24 @@ class TCNTemporalEncoder(nn.Module):
     """
     TCN Temporal Encoder for long-term dependencies and causal relationships.
 
-    Captures patterns across the full 127-bar sequence using dilated causal
+    Captures patterns across the full sequence using dilated causal
     convolutions with exponentially increasing dilation.
-
-    Architecture:
-        - 6 layers, kernel=3, dilations=[1,2,4,8,16,32], filters=64
-        - LayerNorm after each convolution
-        - ReLU activation
-        - Receptive field: 127 bars (exact match with sequence length)
-        - Final time step pooling (t=T only)
-        - Projection to D_z
 
     Args:
         input_channels (int): Number of input feature channels (default: 3)
         d_z (int): Latent dimension for output (default: 128)
+        seq_length (int): Sequence length (default: 127)
 
     Shape:
-        - Input: (batch, 3, 127)
+        - Input: (batch, input_channels, seq_length)
         - Output: (batch, d_z)
     """
 
-    def __init__(self, input_channels: int = 3, d_z: int = 128):
+    def __init__(self, input_channels: int = 3, d_z: int = 128, seq_length: int = 127):
         super().__init__()
 
-        # Dilations for exponentially increasing receptive field
-        dilations = [1, 2, 4, 8, 16, 32]
+        self.seq_length = seq_length
+        dilations = calculate_tcn_dilations(seq_length, kernel_size=3)
 
         # Create layers
         self.layers = nn.ModuleList()
@@ -166,7 +212,7 @@ class TCNTemporalEncoder(nn.Module):
                 'ln': nn.LayerNorm(64),
                 'relu': nn.ReLU()
             }))
-            in_ch = 64  # After first layer, all have 64 channels
+            in_ch = 64
 
         # Projection to latent space
         self.projection = nn.Linear(64, d_z)
@@ -174,14 +220,14 @@ class TCNTemporalEncoder(nn.Module):
         # Store parameters
         self.d_z = d_z
         self.dilations = dilations
-        self.receptive_field = 127  # 1 + sum((3-1)*d for d in dilations) = 127
+        self.receptive_field = 1 + sum((3 - 1) * d for d in dilations)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass through dilated TCN layers.
 
         Args:
-            x: Input tensor of shape (batch, 3, 127)
+            x: Input tensor of shape (batch, channels, seq_length)
 
         Returns:
             Latent vector z_temporal of shape (batch, d_z)
@@ -189,12 +235,9 @@ class TCNTemporalEncoder(nn.Module):
         h = self.get_features(x)
 
         # Final Time Step Pooling: Extract ONLY t=T (last timestep)
-        # CRITICAL: This is the only position with full receptive field coverage
-        # Shape: (batch, 64, 127) -> (batch, 64)
         h_final = h[:, :, -1]
 
         # Project to latent dimension
-        # Shape: (batch, 64) -> (batch, d_z)
         z_temporal = self.projection(h_final)
 
         return z_temporal
@@ -203,28 +246,20 @@ class TCNTemporalEncoder(nn.Module):
         """
         Get intermediate feature maps before final pooling.
 
-        This method is used by Test A (causality test) to verify that
-        features at t=T-1 are not affected by changes at t=T.
-
         Args:
-            x: Input tensor of shape (batch, 3, 127)
+            x: Input tensor of shape (batch, channels, seq_length)
 
         Returns:
-            Feature maps of shape (batch, 64, 127)
+            Feature maps of shape (batch, 64, seq_length)
         """
         h = x
 
         # Apply all TCN layers sequentially
         for layer in self.layers:
-            # Convolution
-            h = layer['conv'](h)  # (batch, 64, 127)
-
-            # LayerNorm (requires transpose for channels-last format)
-            h = h.transpose(1, 2)  # (batch, 127, 64)
+            h = layer['conv'](h)
+            h = h.transpose(1, 2)
             h = layer['ln'](h)
-            h = h.transpose(1, 2)  # (batch, 64, 127)
-
-            # Activation
+            h = h.transpose(1, 2)
             h = layer['relu'](h)
 
         return h
@@ -238,41 +273,39 @@ class CNNTCNHybridEncoder(nn.Module):
     """
     CNN-TCN Hybrid Encoder for intermediate-scale patterns.
 
-    Combines CNN and TCN stages to capture patterns spanning ~40 bars.
-    This encoder is OPTIONAL and controlled by use_hybrid_encoder parameter.
-
-    Architecture:
-        - CNN Stage: 2 layers, kernel=5, filters=64 (RF=9 bars)
-        - TCN Stage: 4 layers, kernel=3, dilations=[1,2,4,8], filters=64 (RF=31 bars)
-        - Total Effective RF: 9 + 31 - 1 = 39 ≈ 40 bars
-        - LayerNorm after each convolution
-        - ReLU activation
-        - Final time step pooling (t=T only)
-        - Projection to D_z
+    Combines CNN and TCN stages to capture patterns at intermediate scale.
+    Architecture scales based on sequence length (target ~30% RF).
 
     Args:
         input_channels (int): Number of input feature channels (default: 3)
         d_z (int): Latent dimension for output (default: 128)
+        seq_length (int): Sequence length (default: 127)
 
     Shape:
-        - Input: (batch, 3, 127)
+        - Input: (batch, input_channels, seq_length)
         - Output: (batch, d_z)
     """
 
-    def __init__(self, input_channels: int = 3, d_z: int = 128):
+    def __init__(self, input_channels: int = 3, d_z: int = 128, seq_length: int = 127):
         super().__init__()
+
+        self.seq_length = seq_length
+        config = calculate_hybrid_config(seq_length)
+        num_cnn_layers = config['cnn_layers']
+        dilations_tcn = config['tcn_dilations']
 
         # CNN Stage
         self.cnn1 = CausalConv1d(input_channels, 64, kernel_size=5, dilation=1)
         self.ln_cnn1 = nn.LayerNorm(64)
 
-        self.cnn2 = CausalConv1d(64, 64, kernel_size=5, dilation=1)
-        self.ln_cnn2 = nn.LayerNorm(64)
+        self.cnn2 = None
+        self.ln_cnn2 = None
+        if num_cnn_layers >= 2:
+            self.cnn2 = CausalConv1d(64, 64, kernel_size=5, dilation=1)
+            self.ln_cnn2 = nn.LayerNorm(64)
 
         # TCN Stage
-        dilations_tcn = [1, 2, 4, 8]
         self.tcn_layers = nn.ModuleList()
-
         for dilation in dilations_tcn:
             self.tcn_layers.append(nn.ModuleDict({
                 'conv': CausalConv1d(64, 64, kernel_size=3, dilation=dilation),
@@ -288,14 +321,18 @@ class CNNTCNHybridEncoder(nn.Module):
 
         # Store parameters
         self.d_z = d_z
-        self.receptive_field = 39  # 9 (CNN) + 31 (TCN) - 1 = 39
+        self.num_cnn_layers = num_cnn_layers
+        self.dilations_tcn = dilations_tcn
+        cnn_rf = 1 + num_cnn_layers * (5 - 1) * 1
+        tcn_rf = sum((3 - 1) * d for d in dilations_tcn)
+        self.receptive_field = cnn_rf + tcn_rf
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass through CNN then TCN stages.
 
         Args:
-            x: Input tensor of shape (batch, 3, 127)
+            x: Input tensor of shape (batch, channels, seq_length)
 
         Returns:
             Latent vector z_fused of shape (batch, d_z)
@@ -307,12 +344,13 @@ class CNNTCNHybridEncoder(nn.Module):
         h = h.transpose(1, 2)
         h = self.relu(h)
 
-        # CNN Stage Layer 2
-        h = self.cnn2(h)
-        h = h.transpose(1, 2)
-        h = self.ln_cnn2(h)
-        h = h.transpose(1, 2)
-        h = self.relu(h)
+        # CNN Stage Layer 2 (optional)
+        if self.cnn2 is not None:
+            h = self.cnn2(h)
+            h = h.transpose(1, 2)
+            h = self.ln_cnn2(h)
+            h = h.transpose(1, 2)
+            h = self.relu(h)
 
         # TCN Stage
         for layer in self.tcn_layers:
@@ -322,12 +360,10 @@ class CNNTCNHybridEncoder(nn.Module):
             h = h.transpose(1, 2)
             h = layer['relu'](h)
 
-        # Final Time Step Pooling: Extract ONLY t=T (last timestep)
-        # Shape: (batch, 64, 127) -> (batch, 64)
+        # Final Time Step Pooling
         h_final = h[:, :, -1]
 
         # Project to latent dimension
-        # Shape: (batch, 64) -> (batch, d_z)
         z_fused = self.projection(h_final)
 
         return z_fused

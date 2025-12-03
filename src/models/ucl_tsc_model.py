@@ -60,7 +60,8 @@ class MultiViewEncoder(nn.Module):
         d_z: int = None,
         latent_dim: int = None,  # Alias for d_z (for test compatibility)
         num_clusters: int = 8,
-        use_hybrid_encoder: bool = False
+        use_hybrid_encoder: bool = False,
+        seq_length: int = 127
     ):
         super().__init__()
 
@@ -75,16 +76,19 @@ class MultiViewEncoder(nn.Module):
         self.latent_dim = d_z  # Alias for compatibility
         self.num_clusters = num_clusters
         self.use_hybrid_encoder = use_hybrid_encoder
+        self.seq_length = seq_length
 
         # Encoder modules
         self.encoder_spatial = ResidualSpatialEncoder(
             input_channels=input_channels,
-            d_z=d_z
+            d_z=d_z,
+            seq_length=seq_length
         )
 
         self.encoder_temporal = TCNTemporalEncoder(
             input_channels=input_channels,
-            d_z=d_z
+            d_z=d_z,
+            seq_length=seq_length
         )
 
         # Alias for test compatibility
@@ -93,7 +97,8 @@ class MultiViewEncoder(nn.Module):
         if use_hybrid_encoder:
             self.encoder_hybrid = CNNTCNHybridEncoder(
                 input_channels=input_channels,
-                d_z=d_z
+                d_z=d_z,
+                seq_length=seq_length
             )
         else:
             self.encoder_hybrid = None
@@ -249,7 +254,8 @@ class UCLTSCModel(nn.Module):
         input_channels: int = 3,
         d_z: int = 128,
         num_clusters: int = 8,
-        use_hybrid_encoder: bool = False
+        use_hybrid_encoder: bool = False,
+        seq_length: int = 127
     ):
         super().__init__()
 
@@ -258,7 +264,8 @@ class UCLTSCModel(nn.Module):
             input_channels=input_channels,
             d_z=d_z,
             num_clusters=num_clusters,
-            use_hybrid_encoder=use_hybrid_encoder
+            use_hybrid_encoder=use_hybrid_encoder,
+            seq_length=seq_length
         )
 
         # Clustering head: learnable centroids
@@ -270,6 +277,7 @@ class UCLTSCModel(nn.Module):
         self.d_z = d_z
         self.num_clusters = num_clusters
         self.use_hybrid_encoder = use_hybrid_encoder
+        self.seq_length = seq_length
 
     def forward(self, x: torch.Tensor) -> tuple:
         """

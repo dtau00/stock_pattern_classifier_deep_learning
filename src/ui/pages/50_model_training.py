@@ -13,6 +13,9 @@ Features:
 - Training history
 """
 
+import warnings
+warnings.filterwarnings("ignore", message=".*missing ScriptRunContext.*")
+
 import streamlit as st
 import torch
 from torch.utils.data import DataLoader, TensorDataset
@@ -233,7 +236,7 @@ def show_model_configuration():
         use_hybrid = st.checkbox(
             "Use Hybrid Encoder",
             value=config.model.use_hybrid_encoder,
-            help="Enable 3rd encoder for intermediate patterns (~40 bars)"
+            help="Enable 3rd encoder for intermediate patterns (scales with window size)"
         )
 
     # Training Configuration
@@ -458,16 +461,20 @@ def show_training():
 
         # Create model
         with st.spinner("Creating model..."):
+            # Detect sequence length from data
+            seq_len = st.session_state['data'].shape[2]  # (N, C, T) -> T
+
             model = UCLTSCModel(
                 input_channels=3,
                 d_z=config.model.d_z,
                 num_clusters=config.model.num_clusters,
-                use_hybrid_encoder=config.model.use_hybrid_encoder
+                use_hybrid_encoder=config.model.use_hybrid_encoder,
+                seq_length=seq_len
             )
 
             # Count parameters
             n_params = sum(p.numel() for p in model.parameters())
-            st.success(f"✅ Model created: {n_params:,} parameters")
+            st.success(f"✅ Model created: {n_params:,} parameters (seq_length={seq_len})")
 
         # Create trainer
         trainer = TwoStageTrainer(model, config, device=device)
@@ -835,11 +842,13 @@ def show_model_management():
 
                     # Create model from config
                     config = checkpoint['config']
+                    seq_len = config.model.seq_length if hasattr(config.model, 'seq_length') else 127
                     model = UCLTSCModel(
                         input_channels=3,
                         d_z=config.model.d_z,
                         num_clusters=config.model.num_clusters,
-                        use_hybrid_encoder=config.model.use_hybrid_encoder
+                        use_hybrid_encoder=config.model.use_hybrid_encoder,
+                        seq_length=seq_len
                     )
 
                     # Load weights
