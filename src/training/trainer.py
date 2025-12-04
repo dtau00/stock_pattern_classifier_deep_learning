@@ -381,7 +381,13 @@ class TwoStageTrainer:
     def _train_epoch_stage1(self, train_loader, optimizer, scaler) -> float:
         """Train one epoch of Stage 1."""
         self.model.train()
-        total_loss = 0.0
+
+        # Accumulate loss on GPU to avoid CPU-GPU sync every batch
+        loss_accumulator = torch.tensor(0.0, device=self.device)
+
+        # Gradient accumulation setup
+        accumulation_steps = self.config.training.gradient_accumulation_steps_stage1
+        num_batches = len(train_loader)
 
         for batch_idx, (x,) in enumerate(train_loader):
             # Move to device if not already there
@@ -392,7 +398,9 @@ class TwoStageTrainer:
             if self.config.training.use_channels_last and self.device == 'cuda':
                 x = x.to(memory_format=torch.channels_last)
 
-            optimizer.zero_grad(set_to_none=True)
+            # Only zero gradients at the start of accumulation cycle
+            if batch_idx % accumulation_steps == 0:
+                optimizer.zero_grad(set_to_none=True)
 
             if scaler is not None:
                 with torch.cuda.amp.autocast():
@@ -407,12 +415,15 @@ class TwoStageTrainer:
                     h1_norm = F.normalize(h1, p=2, dim=1)
                     h2_norm = F.normalize(h2, p=2, dim=1)
 
-                    # NT-Xent loss
-                    loss = self.contrastive_loss_fn(h1_norm, h2_norm)
+                    # NT-Xent loss (scale by accumulation steps for correct gradient magnitude)
+                    loss = self.contrastive_loss_fn(h1_norm, h2_norm) / accumulation_steps
 
                 scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+
+                # Only step optimizer at the end of accumulation cycle
+                if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(train_loader):
+                    scaler.step(optimizer)
+                    scaler.update()
             else:
                 # Create two augmented views ON GPU
                 x1, x2 = self.augmentation(x)
@@ -425,22 +436,33 @@ class TwoStageTrainer:
                 h1_norm = F.normalize(h1, p=2, dim=1)
                 h2_norm = F.normalize(h2, p=2, dim=1)
 
-                # NT-Xent loss
-                loss = self.contrastive_loss_fn(h1_norm, h2_norm)
+                # NT-Xent loss (scale by accumulation steps for correct gradient magnitude)
+                loss = self.contrastive_loss_fn(h1_norm, h2_norm) / accumulation_steps
 
                 loss.backward()
-                optimizer.step()
 
-            total_loss += loss.item()
+                # Only step optimizer at the end of accumulation cycle
+                if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == num_batches:
+                    optimizer.step()
 
-        return total_loss / len(train_loader)
+            # Accumulate loss on GPU (no .item() call = no sync!)
+            loss_accumulator += (loss.detach() * accumulation_steps)
+
+        # Single sync at the end of epoch
+        return (loss_accumulator / num_batches).item()
 
     def _train_epoch_stage2(self, train_loader, optimizer, scaler, lambda_t: float) -> Dict:
         """Train one epoch of Stage 2."""
         self.model.train()
-        total_loss = 0.0
-        total_cluster_loss = 0.0
-        total_contrastive_loss = 0.0
+
+        # Accumulate losses on GPU to avoid CPU-GPU sync every batch
+        loss_accumulator = torch.tensor(0.0, device=self.device)
+        cluster_loss_accumulator = torch.tensor(0.0, device=self.device)
+        contrastive_loss_accumulator = torch.tensor(0.0, device=self.device)
+
+        # Gradient accumulation setup
+        accumulation_steps = self.config.training.gradient_accumulation_steps_stage2
+        num_batches = len(train_loader)
 
         for batch_idx, (x,) in enumerate(train_loader):
             # Move to device if not already there
@@ -451,7 +473,9 @@ class TwoStageTrainer:
             if self.config.training.use_channels_last and self.device == 'cuda':
                 x = x.to(memory_format=torch.channels_last)
 
-            optimizer.zero_grad(set_to_none=True)
+            # Only zero gradients at the start of accumulation cycle
+            if batch_idx % accumulation_steps == 0:
+                optimizer.zero_grad(set_to_none=True)
 
             if scaler is not None:
                 with torch.cuda.amp.autocast():
@@ -472,12 +496,15 @@ class TwoStageTrainer:
                     h2_norm = F.normalize(h2, p=2, dim=1)
                     loss_contrastive = self.contrastive_loss_fn(h1_norm, h2_norm)
 
-                    # Combined loss
-                    loss = loss_cluster + lambda_t * loss_contrastive
+                    # Combined loss (scale by accumulation steps for correct gradient magnitude)
+                    loss = (loss_cluster + lambda_t * loss_contrastive) / accumulation_steps
 
                 scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+
+                # Only step optimizer at the end of accumulation cycle
+                if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(train_loader):
+                    scaler.step(optimizer)
+                    scaler.update()
             else:
                 # Get latent vectors (normalized)
                 z = self.model.encoder(x)
@@ -496,23 +523,32 @@ class TwoStageTrainer:
                 h2_norm = F.normalize(h2, p=2, dim=1)
                 loss_contrastive = self.contrastive_loss_fn(h1_norm, h2_norm)
 
-                # Combined loss
-                loss = loss_cluster + lambda_t * loss_contrastive
+                # Combined loss (scale by accumulation steps for correct gradient magnitude)
+                loss = (loss_cluster + lambda_t * loss_contrastive) / accumulation_steps
 
                 loss.backward()
-                optimizer.step()
 
-            # Normalize centroids after optimizer step
-            self.model.normalize_centroids()
+                # Only step optimizer at the end of accumulation cycle
+                if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == num_batches:
+                    optimizer.step()
 
-            total_loss += loss.item()
-            total_cluster_loss += loss_cluster.item()
-            total_contrastive_loss += loss_contrastive.item()
+            # Normalize centroids periodically (not every batch for efficiency)
+            if (batch_idx + 1) % self.config.training.centroid_normalize_every_n_batches == 0:
+                self.model.normalize_centroids()
 
+            # Accumulate losses on GPU (no .item() calls = no sync!)
+            loss_accumulator += (loss.detach() * accumulation_steps)
+            cluster_loss_accumulator += loss_cluster.detach()
+            contrastive_loss_accumulator += loss_contrastive.detach()
+
+        # Final centroid normalization at end of epoch
+        self.model.normalize_centroids()
+
+        # Single sync at the end of epoch
         return {
-            'total_loss': total_loss / len(train_loader),
-            'cluster_loss': total_cluster_loss / len(train_loader),
-            'contrastive_loss': total_contrastive_loss / len(train_loader)
+            'total_loss': (loss_accumulator / num_batches).item(),
+            'cluster_loss': (cluster_loss_accumulator / num_batches).item(),
+            'contrastive_loss': (contrastive_loss_accumulator / num_batches).item()
         }
 
     def _validate_stage1(self, val_loader) -> float:

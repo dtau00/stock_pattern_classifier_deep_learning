@@ -24,6 +24,8 @@ class TimeSeriesAugmentation:
     Applies a combination of jittering, scaling, and time masking to create
     two different augmented views of the same input sample for contrastive learning.
 
+    Optimized for GPU execution with minimal CPU synchronization.
+
     Args:
         jitter_sigma (float): Std dev of Gaussian noise (as fraction of data std) (default: 0.01)
         scale_range (tuple): Range for uniform amplitude scaling (default: (0.9, 1.1))
@@ -127,8 +129,9 @@ class TimeSeriesAugmentation:
         # Shape: (batch, channels, 1)
         std = x.std(dim=2, keepdim=True)
 
-        # Generate Gaussian noise
-        noise = torch.randn_like(x) * (self.jitter_sigma * std)
+        # Generate Gaussian noise (torch.randn_like doesn't accept generator parameter)
+        noise = torch.randn_like(x)
+        noise = noise * (self.jitter_sigma * std)
 
         return x + noise
 
@@ -147,6 +150,8 @@ class TimeSeriesAugmentation:
         # Generate random scale factors per sample and channel
         # Shape: (batch, channels, 1)
         scale_min, scale_max = self.scale_range
+
+        # Generate on same device as input
         scale_factors = torch.rand(batch_size, channels, 1, device=x.device)
         scale_factors = scale_min + (scale_max - scale_min) * scale_factors
 

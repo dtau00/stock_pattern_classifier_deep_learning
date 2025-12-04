@@ -60,7 +60,8 @@ class TrainingConfig:
         lambda_warmup_epochs: Epochs for lambda warm-up (default: 10)
         early_stopping_patience: Patience for early stopping (default: 10)
         use_mixed_precision: Enable FP16 training (default: True)
-        gradient_accumulation_steps: Mini-batches before optimizer step (default: 1)
+        gradient_accumulation_steps_stage1: Mini-batches before optimizer step in Stage 1 (default: 2)
+        gradient_accumulation_steps_stage2: Mini-batches before optimizer step in Stage 2 (default: 1)
         num_workers: Dataloader workers (default: 4)
         lr_warmup_epochs: LR warm-up epochs for Stage 1 (default: 5)
         stage2_lr_factor: LR multiplier for Stage 2 (default: 0.1)
@@ -70,8 +71,9 @@ class TrainingConfig:
         prefetch_factor: Batches to prefetch per worker (default: 2)
         use_fused_optimizer: Use fused Adam optimizer kernels (default: True)
         use_torch_compile: Compile model with torch.compile() (default: True)
-        compile_mode: Compilation mode - 'default', 'reduce-overhead', or 'max-autotune' (default: 'default')
+        compile_mode: Compilation mode - 'default', 'reduce-overhead', or 'max-autotune' (default: 'reduce-overhead')
         use_channels_last: Use channels-last memory format for better cache locality (default: False)
+        centroid_normalize_every_n_batches: Normalize centroids every N batches in Stage 2 (default: 10)
     """
     batch_size: int = 256
     learning_rate: float = 0.001
@@ -82,18 +84,20 @@ class TrainingConfig:
     lambda_warmup_epochs: int = 10
     early_stopping_patience: int = 10
     use_mixed_precision: bool = True
-    gradient_accumulation_steps: int = 1
+    gradient_accumulation_steps_stage1: int = 2
+    gradient_accumulation_steps_stage2: int = 1
     num_workers: int = 0
     lr_warmup_epochs: int = 5
     stage2_lr_factor: float = 0.1
     pin_memory: bool = False
-    preload_to_gpu: bool = False
+    preload_to_gpu: bool = True
     persistent_workers: bool = False
     prefetch_factor: int = 2
     use_fused_optimizer: bool = True
     use_torch_compile: bool = True
-    compile_mode: str = 'default'
+    compile_mode: str = 'reduce-overhead'
     use_channels_last: bool = False
+    centroid_normalize_every_n_batches: int = 10
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -113,14 +117,18 @@ class TrainingConfig:
             f"lambda_warmup_epochs must be in [5, 20], got {self.lambda_warmup_epochs}"
         assert 5 <= self.early_stopping_patience <= 20, \
             f"early_stopping_patience must be in [5, 20], got {self.early_stopping_patience}"
-        assert 1 <= self.gradient_accumulation_steps <= 8, \
-            f"gradient_accumulation_steps must be in [1, 8], got {self.gradient_accumulation_steps}"
+        assert 1 <= self.gradient_accumulation_steps_stage1 <= 8, \
+            f"gradient_accumulation_steps_stage1 must be in [1, 8], got {self.gradient_accumulation_steps_stage1}"
+        assert 1 <= self.gradient_accumulation_steps_stage2 <= 8, \
+            f"gradient_accumulation_steps_stage2 must be in [1, 8], got {self.gradient_accumulation_steps_stage2}"
         assert 0 <= self.num_workers <= 8, \
             f"num_workers must be in [0, 8], got {self.num_workers}"
         assert 2 <= self.prefetch_factor <= 10, \
             f"prefetch_factor must be in [2, 10], got {self.prefetch_factor}"
         assert self.compile_mode in ['default', 'reduce-overhead', 'max-autotune'], \
             f"compile_mode must be 'default', 'reduce-overhead', or 'max-autotune', got {self.compile_mode}"
+        assert 1 <= self.centroid_normalize_every_n_batches <= 100, \
+            f"centroid_normalize_every_n_batches must be in [1, 100], got {self.centroid_normalize_every_n_batches}"
 
 
 @dataclass

@@ -381,13 +381,32 @@ def show_model_configuration():
             compile_mode = st.selectbox(
                 "Compile Mode",
                 options=['default', 'reduce-overhead', 'max-autotune'],
-                index=0,
+                index=['default', 'reduce-overhead', 'max-autotune'].index(config.training.compile_mode),
                 help="default=balanced, reduce-overhead=faster startup, max-autotune=best performance"
             )
             use_channels_last = st.checkbox(
                 "Channels-Last Memory",
                 value=config.training.use_channels_last,
                 help="Better cache locality for CNNs (5-15% speedup on modern GPUs)"
+            )
+
+            st.markdown("**Gradient Accumulation (Per Stage)**")
+            gradient_accumulation_steps_stage1 = st.number_input(
+                "Stage 1 Gradient Accumulation",
+                min_value=1, max_value=8, value=config.training.gradient_accumulation_steps_stage1,
+                help="Accumulate gradients in Stage 1 (benefits from larger effective batch for NT-Xent, default: 2)"
+            )
+            gradient_accumulation_steps_stage2 = st.number_input(
+                "Stage 2 Gradient Accumulation",
+                min_value=1, max_value=8, value=config.training.gradient_accumulation_steps_stage2,
+                help="Accumulate gradients in Stage 2 (default: 1 for frequent centroid updates)"
+            )
+
+            st.markdown("**Stage 2 Optimizations**")
+            centroid_normalize_every_n_batches = st.number_input(
+                "Centroid Normalize Every N Batches",
+                min_value=1, max_value=100, value=config.training.centroid_normalize_every_n_batches,
+                help="Normalize centroids every N batches (reduces overhead, default: 10)"
             )
 
         with col2:
@@ -426,7 +445,10 @@ def show_model_configuration():
             use_fused_optimizer=use_fused_optimizer,
             use_torch_compile=use_torch_compile,
             compile_mode=compile_mode,
-            use_channels_last=use_channels_last
+            use_channels_last=use_channels_last,
+            gradient_accumulation_steps_stage1=gradient_accumulation_steps_stage1,
+            gradient_accumulation_steps_stage2=gradient_accumulation_steps_stage2,
+            centroid_normalize_every_n_batches=centroid_normalize_every_n_batches
         ),
         augmentation=AugmentationConfig(
             jitter_sigma=jitter_sigma,
