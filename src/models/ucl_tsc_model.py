@@ -395,6 +395,71 @@ class UCLTSCModel(nn.Module):
 
         print(f"Initialized {self.num_clusters} centroids using K-Means++")
 
+    def predict_with_confidence(
+        self,
+        x: torch.Tensor,
+        gamma: float = 5.0
+    ) -> tuple:
+        """
+        Predict cluster assignments with confidence scores.
+
+        This is the primary inference method that returns both cluster assignments
+        and confidence scores, as specified in Design Document Section 4.
+
+        Args:
+            x: Input tensor of shape (batch, channels, seq_len)
+            gamma: Calibrated gamma parameter from confidence calibration
+                  (should be loaded from saved calibration results)
+
+        Returns:
+            Tuple of (cluster_ids, confidence_scores, metrics):
+                - cluster_ids: Cluster assignments of shape (batch,)
+                - confidence_scores: Confidence scores in [0, 1] of shape (batch,)
+                - metrics: Dictionary with:
+                    - 'z_normalized': L2-normalized latent vectors
+                    - 'D_assigned': Distances to assigned centroids
+                    - 'D_sep': Distances to second-closest centroids
+                    - 'margin': D_sep - D_assigned
+
+        Example:
+            >>> model = UCLTSCModel(...)
+            >>> # After training and calibration
+            >>> x_new = torch.randn(10, 3, 127)
+            >>> cluster_ids, confidence_scores, metrics = model.predict_with_confidence(x_new, gamma=5.0)
+            >>> print(f"High confidence: {(confidence_scores >= 0.7).sum().item()}/{len(confidence_scores)}")
+        """
+        # Import here to avoid circular dependency
+        try:
+            from src.evaluation.confidence_scoring import ConfidenceScorer
+        except ImportError:
+            # Try relative import for standalone testing
+            import sys
+            from pathlib import Path
+            sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+            from src.evaluation.confidence_scoring import ConfidenceScorer
+
+        self.eval()  # Set to evaluation mode
+
+        with torch.no_grad():
+            # Get latent vector (normalized)
+            z = self.encoder(x)
+            z_normalized = F.normalize(z, p=2, dim=1)
+
+            # Normalize centroids
+            centroids_normalized = F.normalize(self.centroids, p=2, dim=1)
+
+            # Compute confidence scores
+            scorer = ConfidenceScorer(gamma=gamma)
+            cluster_ids, confidence_scores, conf_metrics = scorer.compute_confidence(
+                z_normalized,
+                centroids_normalized
+            )
+
+            # Add latent vectors to metrics
+            conf_metrics['z_normalized'] = z_normalized
+
+        return cluster_ids, confidence_scores, conf_metrics
+
 
 def test_ucl_tsc_model():
     """

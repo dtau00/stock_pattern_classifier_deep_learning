@@ -307,21 +307,30 @@ def show_pattern_classification():
             model = st.session_state['model']
             model.eval()
 
+            # Get calibrated gamma (if available)
+            calibration = st.session_state.get('calibration', {})
+            gamma = calibration.get('best_gamma', 5.0)
+
             with torch.no_grad():
-                # Get predictions
-                z_norm, cluster_ids = model(data)
+                # NEW: Use predict_with_confidence instead of forward
+                cluster_ids, confidence_scores, metrics = model.predict_with_confidence(
+                    data, gamma=gamma
+                )
 
             cluster_ids = cluster_ids.cpu().numpy()
-            z_norm = z_norm.cpu().numpy()
+            confidence_scores = confidence_scores.cpu().numpy()
+            z_norm = metrics['z_normalized'].cpu().numpy()
 
             # Store results
             st.session_state['inference_results'] = {
                 'cluster_ids': cluster_ids,
+                'confidence_scores': confidence_scores,
                 'latent_vectors': z_norm,
-                'data': data
+                'data': data,
+                'gamma': gamma
             }
 
-            st.success("✅ Classification complete!")
+            st.success(f"✅ Classification complete! (using gamma={gamma:.1f})")
 
     # Display results
     if 'inference_results' in st.session_state:
@@ -366,6 +375,93 @@ def show_pattern_classification():
                 height=400
             )
             st.plotly_chart(fig, use_container_width=True)
+
+        # NEW: Confidence Score Visualization
+        if 'confidence_scores' in results:
+            st.divider()
+            st.subheader("🎯 Confidence Scores")
+
+            confidence_scores = results['confidence_scores']
+            threshold = st.slider(
+                "Confidence Threshold",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.7,
+                step=0.05,
+                help="Samples above this threshold are considered high-confidence"
+            )
+
+            col1, col2 = st.columns([1, 2])
+
+            with col1:
+                # Confidence statistics
+                high_conf_mask = confidence_scores >= threshold
+                n_high = high_conf_mask.sum()
+                n_low = len(confidence_scores) - n_high
+
+                st.metric("High Confidence", f"{n_high:,}",
+                         delta=f"{n_high/len(confidence_scores)*100:.1f}%")
+                st.metric("Low Confidence", f"{n_low:,}",
+                         delta=f"{n_low/len(confidence_scores)*100:.1f}%")
+                st.metric("Mean Confidence", f"{confidence_scores.mean():.3f}")
+                st.metric("Median Confidence", f"{np.median(confidence_scores):.3f}")
+
+                # Calibration info
+                gamma = results.get('gamma', 'N/A')
+                st.caption(f"Calibrated gamma: {gamma}")
+
+            with col2:
+                # Confidence histogram
+                fig = go.Figure()
+
+                fig.add_trace(go.Histogram(
+                    x=confidence_scores,
+                    nbinsx=50,
+                    name='Confidence Scores',
+                    marker_color='lightblue'
+                ))
+
+                # Add threshold line
+                fig.add_vline(
+                    x=threshold,
+                    line_dash="dash",
+                    line_color="red",
+                    line_width=2,
+                    annotation_text=f"Threshold ({threshold:.2f})",
+                    annotation_position="top right"
+                )
+
+                fig.update_layout(
+                    title="Confidence Score Distribution",
+                    xaxis_title="Confidence Score",
+                    yaxis_title="Count",
+                    height=400,
+                    showlegend=False
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+            # Show high/low confidence breakdown by cluster
+            st.subheader("Confidence by Cluster")
+
+            conf_by_cluster = []
+            for cluster_id in unique:
+                mask = cluster_ids == cluster_id
+                cluster_conf = confidence_scores[mask]
+                high_conf_pct = (cluster_conf >= threshold).sum() / len(cluster_conf) * 100
+
+                conf_by_cluster.append({
+                    'Cluster': cluster_id,
+                    'Count': len(cluster_conf),
+                    'Mean Confidence': cluster_conf.mean(),
+                    'High Conf %': high_conf_pct
+                })
+
+            conf_df = pd.DataFrame(conf_by_cluster)
+            conf_df['Mean Confidence'] = conf_df['Mean Confidence'].round(3)
+            conf_df['High Conf %'] = conf_df['High Conf %'].round(1)
+
+            st.dataframe(conf_df, use_container_width=True, hide_index=True)
 
         # Export predictions
         if st.button("💾 Export Predictions"):

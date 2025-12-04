@@ -36,6 +36,63 @@ sys.path.insert(0, str(project_root))
 from src.models.ucl_tsc_model import UCLTSCModel
 from src.config.config import Config, ModelConfig, TrainingConfig, AugmentationConfig
 from src.training.trainer import TwoStageTrainer
+from src.evaluation import ConfidenceCalibrator
+import torch.nn.functional as F
+
+
+def calibrate_confidence_scores(model, val_loader, device):
+    """
+    Calibrate confidence scores on validation set.
+
+    Args:
+        model: Trained UCLTSCModel
+        val_loader: Validation data loader
+        device: Device (cuda/cpu)
+
+    Returns:
+        Calibration results dictionary
+    """
+    model.eval()
+
+    # Collect validation latent vectors and cluster assignments
+    z_val_list = []
+    cluster_ids_list = []
+
+    with torch.no_grad():
+        for (x,) in val_loader:
+            x = x.to(device)
+
+            # Get latent vectors
+            z = model.encoder(x)
+            z_norm = F.normalize(z, p=2, dim=1)
+
+            # Get cluster assignments
+            cluster_ids = model.get_cluster_assignment(z_norm)
+
+            z_val_list.append(z_norm.cpu())
+            cluster_ids_list.append(cluster_ids.cpu())
+
+    # Concatenate all batches
+    z_val = torch.cat(z_val_list, dim=0)
+    cluster_ids_val = torch.cat(cluster_ids_list, dim=0)
+
+    # Get centroids
+    centroids_norm = F.normalize(model.centroids, p=2, dim=1).cpu()
+
+    # Calibrate
+    calibrator = ConfidenceCalibrator(
+        gamma_grid=[0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0],
+        sample_size=5000
+    )
+
+    calibration_results = calibrator.calibrate(
+        z_val,
+        centroids_norm,
+        cluster_ids_val,
+        verbose=False  # Don't print to console in UI
+    )
+
+    return calibration_results
 
 
 def main():
@@ -583,6 +640,33 @@ def show_training():
             st.session_state['train_loader'] = train_loader
             st.session_state['val_loader'] = val_loader
             st.session_state['test_loader'] = test_loader
+
+            progress_bar.progress(0.95)
+
+            # NEW: Calibrate confidence scores
+            st.info("Calibrating confidence scores on validation set...")
+            try:
+                calibration_results = calibrate_confidence_scores(
+                    model, val_loader, device
+                )
+                st.session_state['calibration'] = calibration_results
+
+                # Display calibration results
+                if calibration_results['passed']:
+                    st.success(
+                        f"[PASS] Confidence calibration successful! "
+                        f"Best gamma: {calibration_results['best_gamma']}, "
+                        f"R²: {calibration_results['best_r2']:.3f}"
+                    )
+                else:
+                    st.warning(
+                        f"[WARN] Confidence calibration below threshold "
+                        f"(R² = {calibration_results['best_r2']:.3f} < 0.7). "
+                        f"Model may need retraining."
+                    )
+            except Exception as e:
+                st.warning(f"Confidence calibration failed: {e}. Continuing without calibration.")
+                st.session_state['calibration'] = None
 
             progress_bar.progress(1.0)
             st.success("🎉 Training Complete!")
