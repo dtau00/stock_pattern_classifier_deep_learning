@@ -30,6 +30,9 @@ requests>=2.31.0
 tensorboard>=2.13.0
 wandb>=0.15.0  # Weights & Biases (optional)
 
+# Hyperparameter Optimization
+optuna>=3.5.0
+
 # Model Utilities
 pyyaml>=6.0
 tqdm>=4.65.0

@@ -153,11 +153,46 @@ class TwoStageTrainer:
             free_mem = total_mem - allocated_mem
             print(f"GPU Memory: {allocated_mem:.2f}GB used / {total_mem:.2f}GB total ({free_mem:.2f}GB free)")
 
+        # Model Architecture
+        print(f"\n[Model Architecture]")
+        print(f"Input Channels: {self.config.model.input_channels}")
+        print(f"Latent Dimension (d_z): {self.config.model.d_z}")
+        print(f"Number of Clusters: {self.config.model.num_clusters}")
+        print(f"Use Hybrid Encoder: {self.config.model.use_hybrid_encoder}")
+        print(f"Temperature (tau): {self.config.model.tau}")
+        print(f"Sequence Length: {self.config.model.seq_length}")
+
+        # Training Parameters
+        print(f"\n[Training Parameters]")
         print(f"Batch Size: {self.config.training.batch_size}")
-        print(f"Mixed Precision: {self.config.training.use_mixed_precision}")
+        print(f"Learning Rate: {self.config.training.learning_rate}")
+        print(f"Max Epochs Stage 1: {self.config.training.max_epochs_stage1}")
+        print(f"Max Epochs Stage 2: {self.config.training.max_epochs_stage2}")
+        print(f"LR Warmup Epochs: {self.config.training.lr_warmup_epochs}")
+        print(f"Stage 2 LR Factor: {self.config.training.stage2_lr_factor}")
+        print(f"Early Stopping Patience: {self.config.training.early_stopping_patience}")
+        print(f"Lambda Start: {self.config.training.lambda_start}")
+        print(f"Lambda End: {self.config.training.lambda_end}")
+        print(f"Lambda Warmup Epochs: {self.config.training.lambda_warmup_epochs}")
+
+        # Optimization Settings
+        print(f"\n[Optimization Settings]")
+        print(f"Mixed Precision (FP16): {self.config.training.use_mixed_precision}")
+        print(f"Gradient Accumulation Stage 1: {self.config.training.gradient_accumulation_steps_stage1}")
+        print(f"Gradient Accumulation Stage 2: {self.config.training.gradient_accumulation_steps_stage2}")
+        print(f"Centroid Normalize Every N Batches: {self.config.training.centroid_normalize_every_n_batches}")
+        print(f"Use Fused Optimizer: {self.config.training.use_fused_optimizer}")
+        print(f"Use Torch Compile: {self.config.training.use_torch_compile}")
+        print(f"Compile Mode: {self.config.training.compile_mode}")
+        print(f"Use Channels Last: {self.config.training.use_channels_last}")
+
+        # DataLoader Settings
+        print(f"\n[DataLoader Settings]")
+        print(f"Num Workers: {self.config.training.num_workers}")
         print(f"Pin Memory: {self.config.training.pin_memory}")
         print(f"Preload to GPU: {self.config.training.preload_to_gpu}")
-        print(f"Num Workers: {self.config.training.num_workers}")
+        print(f"Persistent Workers: {self.config.training.persistent_workers}")
+        print(f"Prefetch Factor: {self.config.training.prefetch_factor}")
 
         # Check if data is actually on GPU
         sample_batch = next(iter(train_loader))
@@ -171,11 +206,15 @@ class TwoStageTrainer:
             print("\n[WARNING] preload_to_gpu=True but data is on CPU!")
             print("         Data may not have fit in GPU memory.")
 
-        print("\n[Augmentation]")
+        # Augmentation Settings
+        print("\n[Augmentation Settings]")
         print("-" * 60)
         print(f"Jitter Sigma: {self.config.augmentation.jitter_sigma}")
         print(f"Scale Range: {self.config.augmentation.scale_range}")
-        print(f"Mask %: {self.config.augmentation.mask_max_length_pct}")
+        print(f"Mask Max Length %: {self.config.augmentation.mask_max_length_pct}")
+        print(f"Apply Jitter: {self.config.augmentation.apply_jitter}")
+        print(f"Apply Scaling: {self.config.augmentation.apply_scaling}")
+        print(f"Apply Masking: {self.config.augmentation.apply_masking}")
         print(f"Location: GPU (on-the-fly during training)")
 
         # Stage 1: Contrastive Pre-training
@@ -230,6 +269,15 @@ class TwoStageTrainer:
         # Mixed precision scaler (only on CUDA)
         scaler = torch.cuda.amp.GradScaler() if (self.config.training.use_mixed_precision and self.device == 'cuda') else None
 
+        # Cosine Annealing LR scheduler (applied after warmup)
+        warmup_epochs = self.config.training.lr_warmup_epochs
+        total_epochs = self.config.training.max_epochs_stage1
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=total_epochs - warmup_epochs,
+            eta_min=1e-5
+        )
+
         best_val_loss = float('inf')
         patience_counter = 0
 
@@ -237,13 +285,20 @@ class TwoStageTrainer:
         for epoch in range(self.config.training.max_epochs_stage1):
             epoch_start_time = time.time()
 
-            # Learning rate warm-up
-            if epoch < self.config.training.lr_warmup_epochs:
-                lr = self.config.training.learning_rate * (epoch + 1) / self.config.training.lr_warmup_epochs
+            # Learning rate warm-up, then cosine decay
+            if epoch < warmup_epochs:
+                # Warmup: linearly increase from 0 to max_lr
+                lr = self.config.training.learning_rate * (epoch + 1) / warmup_epochs
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr
             else:
-                lr = self.config.training.learning_rate
+                # Cosine decay after warmup
+                if epoch == warmup_epochs:
+                    # Initialize scheduler at warmup completion
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = self.config.training.learning_rate
+                scheduler.step()
+                lr = optimizer.param_groups[0]['lr']
 
             # Training
             train_loss = self._train_epoch_stage1(train_loader, optimizer, scaler)

@@ -55,3 +55,4 @@ streamlit run src/ui/app.py
 - Gap detection is critical - must exclude overlapping windows
 - HDF5 format required for preprocessed data
 - Run validation before training (Page 13 in UI)
+- use the virtual env in: .\venv

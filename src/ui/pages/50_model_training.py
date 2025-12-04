@@ -34,7 +34,7 @@ project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.models.ucl_tsc_model import UCLTSCModel
-from src.config.config import Config, ModelConfig, TrainingConfig, AugmentationConfig
+from src.config.config import Config, ModelConfig, TrainingConfig, AugmentationConfig, save_preset_config, load_preset_config
 from src.training.trainer import TwoStageTrainer
 from src.evaluation import ConfidenceCalibrator
 import torch.nn.functional as F
@@ -249,24 +249,25 @@ def show_model_configuration():
 
     # Preset selector
     st.subheader("⚙️ Configuration Preset")
+
+    # Initialize preset in session state if not exists
+    if 'selected_preset' not in st.session_state:
+        st.session_state['selected_preset'] = "Default"
+
     preset = st.selectbox(
         "Choose a preset:",
         ["Custom", "Default", "Small (Fast)", "Large (Best Quality)"],
-        index=1
+        index=["Custom", "Default", "Small (Fast)", "Large (Best Quality)"].index(st.session_state['selected_preset']),
+        key="preset_selector"
     )
 
-    # Initialize config based on preset
-    if preset == "Default":
-        from src.config.config import get_default_config
-        config = get_default_config()
-    elif preset == "Small (Fast)":
-        from src.config.config import get_small_config
-        config = get_small_config()
-    elif preset == "Large (Best Quality)":
-        from src.config.config import get_large_config
-        config = get_large_config()
-    else:
-        config = Config()
+    # Update session state if preset changed
+    if preset != st.session_state['selected_preset']:
+        st.session_state['selected_preset'] = preset
+        st.rerun()
+
+    # Load config from disk (will use built-in defaults if file doesn't exist)
+    config = load_preset_config(preset)
 
     # Model Configuration
     st.subheader("🏗️ Model Architecture")
@@ -321,10 +322,17 @@ def show_model_configuration():
             min_value=20, max_value=100, value=config.training.max_epochs_stage2,
             key="stage2_epochs"
         )
+        batch_size_options = [2 ,4 ,8 ,16 ,32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
+        # Find index of current batch size, default to 512 if not in list
+        try:
+            batch_size_index = batch_size_options.index(config.training.batch_size)
+        except ValueError:
+            batch_size_index = 4  # Default to 512
+
         batch_size = st.selectbox(
             "Batch Size",
-            options=[32,64,128, 256, 512, 1024, 2048, 4096, 8192, 16384],
-            index=2  # 512
+            options=batch_size_options,
+            index=batch_size_index
         )
 
     # Advanced Settings
@@ -335,11 +343,11 @@ def show_model_configuration():
             st.markdown("**Optimization**")
             early_stopping = st.number_input(
                 "Early Stopping Patience",
-                min_value=5, max_value=20, value=config.training.early_stopping_patience
+                min_value=1, max_value=100, value=config.training.early_stopping_patience
             )
             num_workers = st.number_input(
                 "DataLoader Workers",
-                min_value=0, max_value=8, value=config.training.num_workers,
+                min_value=0, max_value=32, value=config.training.num_workers,
                 help="Number of subprocesses for data loading (0=main process only)"
             )
             persistent_workers = st.checkbox(
@@ -349,7 +357,7 @@ def show_model_configuration():
             )
             prefetch_factor = st.number_input(
                 "Prefetch Factor",
-                min_value=2, max_value=10, value=config.training.prefetch_factor,
+                min_value=2, max_value=100, value=config.training.prefetch_factor,
                 help="Number of batches to prefetch per worker (only when num_workers > 0)"
             )
             use_mixed_precision = st.checkbox(
@@ -393,19 +401,19 @@ def show_model_configuration():
             st.markdown("**Gradient Accumulation (Per Stage)**")
             gradient_accumulation_steps_stage1 = st.number_input(
                 "Stage 1 Gradient Accumulation",
-                min_value=1, max_value=8, value=config.training.gradient_accumulation_steps_stage1,
+                min_value=1, max_value=100, value=config.training.gradient_accumulation_steps_stage1,
                 help="Accumulate gradients in Stage 1 (benefits from larger effective batch for NT-Xent, default: 2)"
             )
             gradient_accumulation_steps_stage2 = st.number_input(
                 "Stage 2 Gradient Accumulation",
-                min_value=1, max_value=8, value=config.training.gradient_accumulation_steps_stage2,
+                min_value=1, max_value=100, value=config.training.gradient_accumulation_steps_stage2,
                 help="Accumulate gradients in Stage 2 (default: 1 for frequent centroid updates)"
             )
 
             st.markdown("**Stage 2 Optimizations**")
             centroid_normalize_every_n_batches = st.number_input(
                 "Centroid Normalize Every N Batches",
-                min_value=1, max_value=100, value=config.training.centroid_normalize_every_n_batches,
+                min_value=1, max_value=1000, value=config.training.centroid_normalize_every_n_batches,
                 help="Normalize centroids every N batches (reduces overhead, default: 10)"
             )
 
@@ -413,12 +421,13 @@ def show_model_configuration():
             st.markdown("**Data Augmentation**")
             jitter_sigma = st.slider(
                 "Jitter Sigma",
-                min_value=0.005, max_value=0.05, value=config.augmentation.jitter_sigma,
+                min_value=0.005, max_value=0.2, value=config.augmentation.jitter_sigma,
+                step=0.005,
                 format="%.3f"
             )
             mask_pct = st.slider(
                 "Time Mask %",
-                min_value=0.05, max_value=0.2, value=config.augmentation.mask_max_length_pct,
+                min_value=0.05, max_value=0.4, value=config.augmentation.mask_max_length_pct,
                 format="%.2f"
             )
 
@@ -457,9 +466,23 @@ def show_model_configuration():
     )
 
     # Save config button
-    if st.button("Save Configuration", type="primary"):
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        save_button = st.button("💾 Save to Preset", type="primary")
+    with col2:
+        use_button = st.button("✅ Use Configuration", type="secondary")
+
+    if save_button:
+        # Save to the selected preset
+        save_preset_config(preset, custom_config)
         st.session_state['config'] = custom_config
-        st.success("✅ Configuration saved!")
+        st.success(f"✅ Configuration saved to preset: **{preset}**")
+        st.info("👉 Proceed to **Step 3: Train**")
+
+    if use_button:
+        # Just use the config without saving to disk
+        st.session_state['config'] = custom_config
+        st.success("✅ Configuration loaded (not saved to preset)")
         st.info("👉 Proceed to **Step 3: Train**")
 
     # Show current config

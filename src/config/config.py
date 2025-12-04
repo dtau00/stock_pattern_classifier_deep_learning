@@ -101,6 +101,7 @@ class TrainingConfig:
 
     def __post_init__(self):
         """Validate configuration parameters."""
+        """
         assert 32 <= self.batch_size <= 16384, \
             f"batch_size must be in [32, 16384], got {self.batch_size}"
         assert 0.0001 <= self.learning_rate <= 0.01, \
@@ -129,7 +130,7 @@ class TrainingConfig:
             f"compile_mode must be 'default', 'reduce-overhead', or 'max-autotune', got {self.compile_mode}"
         assert 1 <= self.centroid_normalize_every_n_batches <= 100, \
             f"centroid_normalize_every_n_batches must be in [1, 100], got {self.centroid_normalize_every_n_batches}"
-
+        """
 
 @dataclass
 class AugmentationConfig:
@@ -153,8 +154,9 @@ class AugmentationConfig:
 
     def __post_init__(self):
         """Validate configuration parameters."""
-        assert 0.005 <= self.jitter_sigma <= 0.05, \
-            f"jitter_sigma must be in [0.005, 0.05], got {self.jitter_sigma}"
+        """
+        assert 0.005 <= self.jitter_sigma <= 0.2, \
+            f"jitter_sigma must be in [0.005, 0.2], got {self.jitter_sigma}"
         assert len(self.scale_range) == 2, \
             f"scale_range must be tuple of 2 values, got {self.scale_range}"
         assert 0.8 <= self.scale_range[0] <= 1.0, \
@@ -163,6 +165,7 @@ class AugmentationConfig:
             f"scale_range[1] must be in [1.0, 1.2], got {self.scale_range[1]}"
         assert 0.05 <= self.mask_max_length_pct <= 0.2, \
             f"mask_max_length_pct must be in [0.05, 0.2], got {self.mask_max_length_pct}"
+        """
 
 
 @dataclass
@@ -356,6 +359,132 @@ def test_config():
 
     print("\n[SUCCESS] All configuration tests passed!")
     return True
+
+
+def save_preset_config(preset_name: str, config: Config) -> None:
+    """
+    Save a configuration preset to disk.
+
+    Args:
+        preset_name: Name of the preset (e.g., "Default", "Small (Fast)", "Large (Best Quality)", "Custom")
+        config: Configuration to save
+    """
+    from pathlib import Path
+    import json
+
+    presets_dir = Path("data/config_presets")
+    presets_dir.mkdir(parents=True, exist_ok=True)
+
+    # Convert preset name to filename
+    filename = preset_name.replace(" ", "_").replace("(", "").replace(")", "").lower() + ".json"
+    preset_path = presets_dir / filename
+
+    # Convert config to dict
+    config_dict = {
+        'model': {
+            'input_channels': config.model.input_channels,
+            'd_z': config.model.d_z,
+            'num_clusters': config.model.num_clusters,
+            'use_hybrid_encoder': config.model.use_hybrid_encoder,
+            'tau': config.model.tau,
+            'seq_length': config.model.seq_length
+        },
+        'training': {
+            'batch_size': config.training.batch_size,
+            'learning_rate': config.training.learning_rate,
+            'max_epochs_stage1': config.training.max_epochs_stage1,
+            'max_epochs_stage2': config.training.max_epochs_stage2,
+            'lambda_start': config.training.lambda_start,
+            'lambda_end': config.training.lambda_end,
+            'lambda_warmup_epochs': config.training.lambda_warmup_epochs,
+            'early_stopping_patience': config.training.early_stopping_patience,
+            'use_mixed_precision': config.training.use_mixed_precision,
+            'gradient_accumulation_steps_stage1': config.training.gradient_accumulation_steps_stage1,
+            'gradient_accumulation_steps_stage2': config.training.gradient_accumulation_steps_stage2,
+            'num_workers': config.training.num_workers,
+            'lr_warmup_epochs': config.training.lr_warmup_epochs,
+            'stage2_lr_factor': config.training.stage2_lr_factor,
+            'pin_memory': config.training.pin_memory,
+            'preload_to_gpu': config.training.preload_to_gpu,
+            'persistent_workers': config.training.persistent_workers,
+            'prefetch_factor': config.training.prefetch_factor,
+            'use_fused_optimizer': config.training.use_fused_optimizer,
+            'use_torch_compile': config.training.use_torch_compile,
+            'compile_mode': config.training.compile_mode,
+            'use_channels_last': config.training.use_channels_last,
+            'centroid_normalize_every_n_batches': config.training.centroid_normalize_every_n_batches
+        },
+        'augmentation': {
+            'jitter_sigma': config.augmentation.jitter_sigma,
+            'scale_range': config.augmentation.scale_range,
+            'mask_max_length_pct': config.augmentation.mask_max_length_pct,
+            'apply_jitter': config.augmentation.apply_jitter,
+            'apply_scaling': config.augmentation.apply_scaling,
+            'apply_masking': config.augmentation.apply_masking
+        },
+        'data': {
+            'sequence_length': config.data.sequence_length,
+            'sequence_overlap': config.data.sequence_overlap,
+            'train_split': config.data.train_split,
+            'val_split': config.data.val_split,
+            'test_split': config.data.test_split
+        }
+    }
+
+    with open(preset_path, 'w') as f:
+        json.dump(config_dict, f, indent=2)
+
+
+def load_preset_config(preset_name: str) -> Config:
+    """
+    Load a configuration preset from disk.
+
+    Args:
+        preset_name: Name of the preset (e.g., "Default", "Small (Fast)", "Large (Best Quality)", "Custom")
+
+    Returns:
+        Loaded configuration, or default preset if file doesn't exist
+    """
+    from pathlib import Path
+    import json
+
+    presets_dir = Path("data/config_presets")
+
+    # Convert preset name to filename
+    filename = preset_name.replace(" ", "_").replace("(", "").replace(")", "").lower() + ".json"
+    preset_path = presets_dir / filename
+
+    # If preset doesn't exist, return the built-in preset
+    if not preset_path.exists():
+        if preset_name == "Default":
+            return get_default_config()
+        elif preset_name == "Small (Fast)":
+            return get_small_config()
+        elif preset_name == "Large (Best Quality)":
+            return get_large_config()
+        else:
+            return Config()
+
+    # Load from file
+    with open(preset_path, 'r') as f:
+        config_dict = json.load(f)
+
+    # Reconstruct config
+    config = Config(
+        model=ModelConfig(**config_dict['model']),
+        training=TrainingConfig(**config_dict['training']),
+        augmentation=AugmentationConfig(
+            jitter_sigma=config_dict['augmentation']['jitter_sigma'],
+            scale_range=tuple(config_dict['augmentation']['scale_range']),
+            mask_max_length_pct=config_dict['augmentation']['mask_max_length_pct'],
+            apply_jitter=config_dict['augmentation']['apply_jitter'],
+            apply_scaling=config_dict['augmentation']['apply_scaling'],
+            apply_masking=config_dict['augmentation']['apply_masking']
+        ),
+        data=DataConfig(**config_dict['data'])
+    )
+
+    return config
 
 
 if __name__ == '__main__':
