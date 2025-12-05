@@ -92,33 +92,35 @@ class ResidualSpatialEncoder(nn.Module):
         input_channels (int): Number of input feature channels (default: 3)
         d_z (int): Latent dimension for output (default: 128)
         seq_length (int): Sequence length (default: 127)
+        hidden_channels (int): Number of channels in conv layers (default: 128)
 
     Shape:
         - Input: (batch, input_channels, seq_length)
         - Output: (batch, d_z)
     """
 
-    def __init__(self, input_channels: int = 3, d_z: int = 128, seq_length: int = 127):
+    def __init__(self, input_channels: int = 3, d_z: int = 128, seq_length: int = 127, hidden_channels: int = 128):
         super().__init__()
 
         self.seq_length = seq_length
+        self.hidden_channels = hidden_channels
         num_layers = 3 if seq_length >= 15 else 2
 
         # Convolutional layers
-        self.conv1 = CausalConv1d(input_channels, 64, kernel_size=5, dilation=1)
-        self.ln1 = nn.LayerNorm(64)
+        self.conv1 = CausalConv1d(input_channels, hidden_channels, kernel_size=5, dilation=1)
+        self.ln1 = nn.LayerNorm(hidden_channels)
 
-        self.conv2 = CausalConv1d(64, 64, kernel_size=5, dilation=1)
-        self.ln2 = nn.LayerNorm(64)
+        self.conv2 = CausalConv1d(hidden_channels, hidden_channels, kernel_size=5, dilation=1)
+        self.ln2 = nn.LayerNorm(hidden_channels)
 
         self.conv3 = None
         self.ln3 = None
         if num_layers >= 3:
-            self.conv3 = CausalConv1d(64, 64, kernel_size=5, dilation=1)
-            self.ln3 = nn.LayerNorm(64)
+            self.conv3 = CausalConv1d(hidden_channels, hidden_channels, kernel_size=5, dilation=1)
+            self.ln3 = nn.LayerNorm(hidden_channels)
 
         # Projection to latent space
-        self.projection = nn.Linear(64, d_z)
+        self.projection = nn.Linear(hidden_channels, d_z)
 
         # Activation
         self.relu = nn.ReLU()
@@ -190,16 +192,18 @@ class TCNTemporalEncoder(nn.Module):
         input_channels (int): Number of input feature channels (default: 3)
         d_z (int): Latent dimension for output (default: 128)
         seq_length (int): Sequence length (default: 127)
+        hidden_channels (int): Number of channels in conv layers (default: 128)
 
     Shape:
         - Input: (batch, input_channels, seq_length)
         - Output: (batch, d_z)
     """
 
-    def __init__(self, input_channels: int = 3, d_z: int = 128, seq_length: int = 127):
+    def __init__(self, input_channels: int = 3, d_z: int = 128, seq_length: int = 127, hidden_channels: int = 128):
         super().__init__()
 
         self.seq_length = seq_length
+        self.hidden_channels = hidden_channels
         dilations = calculate_tcn_dilations(seq_length, kernel_size=3)
 
         # Create layers
@@ -208,14 +212,14 @@ class TCNTemporalEncoder(nn.Module):
 
         for dilation in dilations:
             self.layers.append(nn.ModuleDict({
-                'conv': CausalConv1d(in_ch, 64, kernel_size=3, dilation=dilation),
-                'ln': nn.LayerNorm(64),
+                'conv': CausalConv1d(in_ch, hidden_channels, kernel_size=3, dilation=dilation),
+                'ln': nn.LayerNorm(hidden_channels),
                 'relu': nn.ReLU()
             }))
-            in_ch = 64
+            in_ch = hidden_channels
 
         # Projection to latent space
-        self.projection = nn.Linear(64, d_z)
+        self.projection = nn.Linear(hidden_channels, d_z)
 
         # Store parameters
         self.d_z = d_z
@@ -280,41 +284,43 @@ class CNNTCNHybridEncoder(nn.Module):
         input_channels (int): Number of input feature channels (default: 3)
         d_z (int): Latent dimension for output (default: 128)
         seq_length (int): Sequence length (default: 127)
+        hidden_channels (int): Number of channels in conv layers (default: 128)
 
     Shape:
         - Input: (batch, input_channels, seq_length)
         - Output: (batch, d_z)
     """
 
-    def __init__(self, input_channels: int = 3, d_z: int = 128, seq_length: int = 127):
+    def __init__(self, input_channels: int = 3, d_z: int = 128, seq_length: int = 127, hidden_channels: int = 128):
         super().__init__()
 
         self.seq_length = seq_length
+        self.hidden_channels = hidden_channels
         config = calculate_hybrid_config(seq_length)
         num_cnn_layers = config['cnn_layers']
         dilations_tcn = config['tcn_dilations']
 
         # CNN Stage
-        self.cnn1 = CausalConv1d(input_channels, 64, kernel_size=5, dilation=1)
-        self.ln_cnn1 = nn.LayerNorm(64)
+        self.cnn1 = CausalConv1d(input_channels, hidden_channels, kernel_size=5, dilation=1)
+        self.ln_cnn1 = nn.LayerNorm(hidden_channels)
 
         self.cnn2 = None
         self.ln_cnn2 = None
         if num_cnn_layers >= 2:
-            self.cnn2 = CausalConv1d(64, 64, kernel_size=5, dilation=1)
-            self.ln_cnn2 = nn.LayerNorm(64)
+            self.cnn2 = CausalConv1d(hidden_channels, hidden_channels, kernel_size=5, dilation=1)
+            self.ln_cnn2 = nn.LayerNorm(hidden_channels)
 
         # TCN Stage
         self.tcn_layers = nn.ModuleList()
         for dilation in dilations_tcn:
             self.tcn_layers.append(nn.ModuleDict({
-                'conv': CausalConv1d(64, 64, kernel_size=3, dilation=dilation),
-                'ln': nn.LayerNorm(64),
+                'conv': CausalConv1d(hidden_channels, hidden_channels, kernel_size=3, dilation=dilation),
+                'ln': nn.LayerNorm(hidden_channels),
                 'relu': nn.ReLU()
             }))
 
         # Projection to latent space
-        self.projection = nn.Linear(64, d_z)
+        self.projection = nn.Linear(hidden_channels, d_z)
 
         # Activation
         self.relu = nn.ReLU()

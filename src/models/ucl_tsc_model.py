@@ -61,7 +61,11 @@ class MultiViewEncoder(nn.Module):
         latent_dim: int = None,  # Alias for d_z (for test compatibility)
         num_clusters: int = 8,
         use_hybrid_encoder: bool = False,
-        seq_length: int = 127
+        seq_length: int = 127,
+        encoder_hidden_channels: int = 128,
+        projection_hidden_dim: int = 512,
+        fusion_hidden_dim: int = 256,
+        use_projection_bottleneck: bool = False
     ):
         super().__init__()
 
@@ -77,18 +81,24 @@ class MultiViewEncoder(nn.Module):
         self.num_clusters = num_clusters
         self.use_hybrid_encoder = use_hybrid_encoder
         self.seq_length = seq_length
+        self.encoder_hidden_channels = encoder_hidden_channels
+        self.projection_hidden_dim = projection_hidden_dim
+        self.fusion_hidden_dim = fusion_hidden_dim
+        self.use_projection_bottleneck = use_projection_bottleneck
 
         # Encoder modules
         self.encoder_spatial = ResidualSpatialEncoder(
             input_channels=input_channels,
             d_z=d_z,
-            seq_length=seq_length
+            seq_length=seq_length,
+            hidden_channels=encoder_hidden_channels
         )
 
         self.encoder_temporal = TCNTemporalEncoder(
             input_channels=input_channels,
             d_z=d_z,
-            seq_length=seq_length
+            seq_length=seq_length,
+            hidden_channels=encoder_hidden_channels
         )
 
         # Alias for test compatibility
@@ -98,7 +108,8 @@ class MultiViewEncoder(nn.Module):
             self.encoder_hybrid = CNNTCNHybridEncoder(
                 input_channels=input_channels,
                 d_z=d_z,
-                seq_length=seq_length
+                seq_length=seq_length,
+                hidden_channels=encoder_hidden_channels
             )
         else:
             self.encoder_hybrid = None
@@ -106,14 +117,15 @@ class MultiViewEncoder(nn.Module):
         # Fusion layer
         self.fusion = AdaptiveFusionLayer(
             d_z=d_z,
-            use_hybrid_encoder=use_hybrid_encoder
+            use_hybrid_encoder=use_hybrid_encoder,
+            hidden_dim=fusion_hidden_dim
         )
 
         # Projection head for contrastive learning
         self.projection_head = ProjectionHead(
             d_z=d_z,
-            d_h=d_z,  # Same dimension for simplicity
-            use_bottleneck=False
+            d_h=projection_hidden_dim,  # Use configured hidden dimension
+            use_bottleneck=use_projection_bottleneck
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -255,7 +267,11 @@ class UCLTSCModel(nn.Module):
         d_z: int = 128,
         num_clusters: int = 8,
         use_hybrid_encoder: bool = False,
-        seq_length: int = 127
+        seq_length: int = 127,
+        encoder_hidden_channels: int = 128,
+        projection_hidden_dim: int = 512,
+        fusion_hidden_dim: int = 256,
+        use_projection_bottleneck: bool = False
     ):
         super().__init__()
 
@@ -265,7 +281,11 @@ class UCLTSCModel(nn.Module):
             d_z=d_z,
             num_clusters=num_clusters,
             use_hybrid_encoder=use_hybrid_encoder,
-            seq_length=seq_length
+            seq_length=seq_length,
+            encoder_hidden_channels=encoder_hidden_channels,
+            projection_hidden_dim=projection_hidden_dim,
+            fusion_hidden_dim=fusion_hidden_dim,
+            use_projection_bottleneck=use_projection_bottleneck
         )
 
         # Clustering head: learnable centroids

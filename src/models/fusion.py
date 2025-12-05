@@ -33,6 +33,7 @@ class AdaptiveFusionLayer(nn.Module):
         d_z (int): Latent dimension (default: 128)
         use_hybrid_encoder (bool): If True, expects 3 encoders;
                                     if False, expects 2 encoders (default: False)
+        hidden_dim (int): Hidden dimension in FFN (default: 256)
 
     Shape:
         - Input (2-encoder mode):
@@ -46,7 +47,7 @@ class AdaptiveFusionLayer(nn.Module):
         - Output: (batch, d_z)
 
     Example:
-        >>> fusion = AdaptiveFusionLayer(d_z=128, use_hybrid_encoder=False)
+        >>> fusion = AdaptiveFusionLayer(d_z=128, use_hybrid_encoder=False, hidden_dim=256)
         >>> z_spatial = torch.randn(32, 128)
         >>> z_temporal = torch.randn(32, 128)
         >>> z = fusion(z_spatial, z_temporal)
@@ -54,20 +55,21 @@ class AdaptiveFusionLayer(nn.Module):
         torch.Size([32, 128])
     """
 
-    def __init__(self, d_z: int = 128, use_hybrid_encoder: bool = False):
+    def __init__(self, d_z: int = 128, use_hybrid_encoder: bool = False, hidden_dim: int = 256):
         super().__init__()
 
         self.use_hybrid_encoder = use_hybrid_encoder
         self.d_z = d_z
+        self.hidden_dim = hidden_dim
         num_encoders = 3 if use_hybrid_encoder else 2
 
         # FFN to compute attention weights
         # Input: concatenated encoder outputs (num_encoders * d_z)
         # Output: attention weights (num_encoders)
         self.ffn = nn.Sequential(
-            nn.Linear(num_encoders * d_z, 128),
+            nn.Linear(num_encoders * d_z, hidden_dim),
             nn.ReLU(),
-            nn.Linear(128, num_encoders),
+            nn.Linear(hidden_dim, num_encoders),
             nn.Softmax(dim=1)
         )
 

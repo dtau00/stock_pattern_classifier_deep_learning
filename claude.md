@@ -32,6 +32,7 @@ models/                # Model checkpoints (gitignored)
 
 **Model Architecture:**
 - Stage 1: Contrastive learning (NT-Xent loss)
+  - Auto-evaluates quality metrics after training (variance, effective rank, k-NN, etc.)
 - Stage 2: DEC clustering + contrastive
 - Encoders: CNN, TCN, or Hybrid options
 - Output: Cluster assignments for pattern recognition
@@ -56,3 +57,17 @@ streamlit run src/ui/app.py
 - HDF5 format required for preprocessed data
 - Run validation before training (Page 13 in UI)
 - use the virtual env in: .\venv
+
+## Training Quality Metrics
+
+**Stage 1 evaluation (automatic after training):**
+- Embedding Variance: >0.25 (detects feature collapse)
+- Effective Rank: >60% of d_z (dimensionality usage)
+- Alignment: <0.5 (positive pairs close)
+- Uniformity: <-1.5 (embeddings spread on hypersphere)
+- k-NN Accuracy: >0.75 (augmentation invariance)
+
+**Batch size matters:** Contrastive learning quality depends on number of negative samples
+- Batch 8: Only 7 negatives (poor quality, artificially low loss)
+- Batch 128-256: 127-255 negatives (good quality)
+- Loss values NOT comparable across batch sizes (higher batch = higher loss is normal)

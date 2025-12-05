@@ -23,6 +23,15 @@ except ImportError:
     from losses import NTXentLoss, ClusteringLoss, LambdaSchedule
     from augmentation import TimeSeriesAugmentation
 
+try:
+    from ..evaluation.stage1_metrics import evaluate_stage1
+except ImportError:
+    try:
+        from src.evaluation.stage1_metrics import evaluate_stage1
+    except ImportError:
+        # Fallback if evaluation module not available
+        evaluate_stage1 = None
+
 
 class TwoStageTrainer:
     """
@@ -161,6 +170,10 @@ class TwoStageTrainer:
         print(f"Use Hybrid Encoder: {self.config.model.use_hybrid_encoder}")
         print(f"Temperature (tau): {self.config.model.tau}")
         print(f"Sequence Length: {self.config.model.seq_length}")
+        print(f"Encoder Hidden Channels: {self.config.model.encoder_hidden_channels}")
+        print(f"Projection Hidden Dim: {self.config.model.projection_hidden_dim}")
+        print(f"Fusion Hidden Dim: {self.config.model.fusion_hidden_dim}")
+        print(f"Use Projection Bottleneck: {self.config.model.use_projection_bottleneck}")
 
         # Training Parameters
         print(f"\n[Training Parameters]")
@@ -345,6 +358,22 @@ class TwoStageTrainer:
         # Load best checkpoint
         self._load_checkpoint('best_stage1.pt')
         print(f"\nStage 1 complete. Best val loss: {best_val_loss:.4f}")
+
+        # Evaluate Stage 1 quality metrics
+        if evaluate_stage1 is not None:
+            try:
+                stage1_metrics = evaluate_stage1(
+                    self.model,
+                    val_loader,
+                    self.device,
+                    self.augmentation,
+                    self.config
+                )
+                # Store metrics in history
+                self.history['stage1']['metrics'] = stage1_metrics
+            except Exception as e:
+                print(f"\n[Warning] Stage 1 evaluation failed: {e}")
+                print("Continuing with Stage 2...")
 
     def _train_stage2(self, train_loader: DataLoader, val_loader: DataLoader, callback=None):
         """Stage 2: Joint fine-tuning."""

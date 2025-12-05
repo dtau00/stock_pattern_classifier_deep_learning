@@ -202,7 +202,8 @@ def stage1_objective(
         params = {}
         for param_name, values in param_space.items():
             if param_name in ['batch_size', 'gradient_accumulation_steps', 'd_z',
-                             'lr_warmup_epochs', 'num_workers']:
+                             'lr_warmup_epochs', 'num_workers', 'encoder_hidden_channels',
+                             'projection_hidden_dim', 'fusion_hidden_dim']:
                 params[param_name] = trial.suggest_categorical(param_name, values)
             elif param_name in ['learning_rate', 'temperature', 'jitter_sigma',
                                'adam_beta1', 'adam_beta2', 'adam_eps', 'weight_decay']:
@@ -211,13 +212,19 @@ def stage1_objective(
                 params['scale_range_min'] = trial.suggest_categorical(param_name, values)
             elif param_name == 'scale_range_max':
                 params['scale_range_max'] = trial.suggest_categorical(param_name, values)
+            elif param_name == 'use_projection_bottleneck':
+                params[param_name] = trial.suggest_categorical(param_name, values)
 
         trial_handler.log_trial_start(trial.number, params)
 
         # Create configuration
         model_config = ModelConfig(
             d_z=params.get('d_z', 128),
-            tau=params.get('temperature', 0.1)
+            tau=params.get('temperature', 0.1),
+            encoder_hidden_channels=params.get('encoder_hidden_channels', 128),
+            projection_hidden_dim=params.get('projection_hidden_dim', 512),
+            fusion_hidden_dim=params.get('fusion_hidden_dim', 256),
+            use_projection_bottleneck=params.get('use_projection_bottleneck', False)
         )
 
         training_config = TrainingConfig(
@@ -265,7 +272,11 @@ def stage1_objective(
             d_z=model_config.d_z,
             num_clusters=8,  # Fixed for Stage 1
             use_hybrid_encoder=False,
-            seq_length=127
+            seq_length=127,
+            encoder_hidden_channels=model_config.encoder_hidden_channels,
+            projection_hidden_dim=model_config.projection_hidden_dim,
+            fusion_hidden_dim=model_config.fusion_hidden_dim,
+            use_projection_bottleneck=model_config.use_projection_bottleneck
         )
 
         # Create trainer
@@ -339,14 +350,31 @@ def stage2_objective(
 
         trial_handler.log_trial_start(trial.number, params)
 
-        # Load Stage 1 checkpoint to get d_z
+        # Load Stage 1 checkpoint to get architecture parameters
         checkpoint = torch.load(stage1_checkpoint)
-        d_z = checkpoint.get('config', {}).get('d_z', 128)
+        checkpoint_config = checkpoint.get('config', {})
+        d_z = checkpoint_config.get('d_z', 128)
+
+        # Get architecture parameters from checkpoint with backward compatibility
+        if hasattr(checkpoint_config, 'model'):
+            encoder_hidden_channels = getattr(checkpoint_config.model, 'encoder_hidden_channels', 128)
+            projection_hidden_dim = getattr(checkpoint_config.model, 'projection_hidden_dim', 512)
+            fusion_hidden_dim = getattr(checkpoint_config.model, 'fusion_hidden_dim', 256)
+            use_projection_bottleneck = getattr(checkpoint_config.model, 'use_projection_bottleneck', False)
+        else:
+            encoder_hidden_channels = 128
+            projection_hidden_dim = 512
+            fusion_hidden_dim = 256
+            use_projection_bottleneck = False
 
         # Create configuration
         model_config = ModelConfig(
             d_z=d_z,
-            num_clusters=params.get('num_clusters', 8)
+            num_clusters=params.get('num_clusters', 8),
+            encoder_hidden_channels=encoder_hidden_channels,
+            projection_hidden_dim=projection_hidden_dim,
+            fusion_hidden_dim=fusion_hidden_dim,
+            use_projection_bottleneck=use_projection_bottleneck
         )
 
         training_config = TrainingConfig(
@@ -382,7 +410,11 @@ def stage2_objective(
             input_channels=3,
             d_z=d_z,
             num_clusters=model_config.num_clusters,
-            seq_length=127
+            seq_length=127,
+            encoder_hidden_channels=model_config.encoder_hidden_channels,
+            projection_hidden_dim=model_config.projection_hidden_dim,
+            fusion_hidden_dim=model_config.fusion_hidden_dim,
+            use_projection_bottleneck=model_config.use_projection_bottleneck
         )
         model.load_state_dict(checkpoint['model_state_dict'], strict=False)
 
@@ -469,7 +501,11 @@ def combined_objective(
         model_config = ModelConfig(
             d_z=params.get('d_z', 128),
             tau=params.get('temperature', 0.1),
-            num_clusters=params.get('num_clusters', 8)
+            num_clusters=params.get('num_clusters', 8),
+            encoder_hidden_channels=params.get('encoder_hidden_channels', 128),
+            projection_hidden_dim=params.get('projection_hidden_dim', 512),
+            fusion_hidden_dim=params.get('fusion_hidden_dim', 256),
+            use_projection_bottleneck=params.get('use_projection_bottleneck', False)
         )
 
         training_config = TrainingConfig(
@@ -516,7 +552,11 @@ def combined_objective(
             input_channels=3,
             d_z=model_config.d_z,
             num_clusters=model_config.num_clusters,
-            seq_length=127
+            seq_length=127,
+            encoder_hidden_channels=model_config.encoder_hidden_channels,
+            projection_hidden_dim=model_config.projection_hidden_dim,
+            fusion_hidden_dim=model_config.fusion_hidden_dim,
+            use_projection_bottleneck=model_config.use_projection_bottleneck
         )
 
         # Create trainer and run full training

@@ -141,6 +141,11 @@ def get_default_param_space(stage: str = "combined") -> Dict[str, List[Any]]:
         'jitter_sigma': [0.005, 0.01, 0.02],  # Augmentation noise
         'scale_range_min': [0.85, 0.9, 0.95],
         'scale_range_max': [1.05, 1.1, 1.15],
+        # Architecture parameters
+        'encoder_hidden_channels': [64, 128, 256],  # Conv layer channels
+        'projection_hidden_dim': [256, 512, 1024],  # Projection MLP hidden dim
+        'fusion_hidden_dim': [128, 256, 512],  # Fusion attention hidden dim
+        'use_projection_bottleneck': [False, True],  # Bottleneck architecture
     }
 
     # Stage 2 specific parameters

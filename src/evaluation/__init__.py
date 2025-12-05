@@ -16,6 +16,13 @@ from .clustering_metrics import ClusteringMetrics
 from .confidence_calibration import ConfidenceCalibrator
 from .statistical_tests import StatisticalTests
 from .evaluation_report import EvaluationReport
+from .stage1_metrics import (
+    evaluate_stage1,
+    embedding_variance,
+    effective_rank,
+    alignment_uniformity,
+    knn_accuracy
+)
 
 __all__ = [
     'ConfidenceScorer',
@@ -23,4 +30,9 @@ __all__ = [
     'ConfidenceCalibrator',
     'StatisticalTests',
     'EvaluationReport',
+    'evaluate_stage1',
+    'embedding_variance',
+    'effective_rank',
+    'alignment_uniformity',
+    'knn_accuracy',
 ]

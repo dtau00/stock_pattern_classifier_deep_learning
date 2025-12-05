@@ -297,6 +297,37 @@ def show_model_configuration():
             help="Enable 3rd encoder for intermediate patterns (scales with window size)"
         )
 
+    # Advanced Architecture Configuration
+    with st.expander("🔧 Advanced Architecture Settings (Affects Model Capacity)", expanded=False):
+        st.markdown("**These parameters control the internal dimensions of the model architecture.**")
+        st.info("💡 **Tip:** Increase these values to improve embedding quality and prevent dimensional collapse. Higher values = more capacity but slower training.")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            encoder_hidden_channels = st.number_input(
+                "Encoder Hidden Channels",
+                min_value=32, max_value=512, value=config.model.encoder_hidden_channels,
+                help="Number of channels in CNN/TCN layers. Default: 128. Higher = more feature capacity."
+            )
+            projection_hidden_dim = st.number_input(
+                "Projection Head Hidden Dim",
+                min_value=64, max_value=2048, value=config.model.projection_hidden_dim,
+                help="Hidden dimension in projection MLP. Default: 512 (4x d_z). Higher = richer contrastive representations."
+            )
+
+        with col2:
+            fusion_hidden_dim = st.number_input(
+                "Fusion Attention Hidden Dim",
+                min_value=64, max_value=1024, value=config.model.fusion_hidden_dim,
+                help="Hidden dimension in fusion FFN. Default: 256 (2x d_z). Higher = better encoder fusion."
+            )
+            use_projection_bottleneck = st.checkbox(
+                "Use Projection Bottleneck",
+                value=config.model.use_projection_bottleneck,
+                help="Use bottleneck architecture in projection head (more non-linearity)"
+            )
+
     # Training Configuration
     st.subheader("📈 Training Parameters")
 
@@ -431,13 +462,33 @@ def show_model_configuration():
                 format="%.2f"
             )
 
+            col_scale1, col_scale2 = st.columns(2)
+            with col_scale1:
+                scale_min = st.number_input(
+                    "Scale Min",
+                    min_value=0.8, max_value=1.0, value=config.augmentation.scale_range[0],
+                    step=0.01,
+                    format="%.2f"
+                )
+            with col_scale2:
+                scale_max = st.number_input(
+                    "Scale Max",
+                    min_value=1.0, max_value=1.2, value=config.augmentation.scale_range[1],
+                    step=0.01,
+                    format="%.2f"
+                )
+
     # Create config object
     custom_config = Config(
         model=ModelConfig(
             d_z=d_z,
             num_clusters=num_clusters,
             tau=tau,
-            use_hybrid_encoder=use_hybrid
+            use_hybrid_encoder=use_hybrid,
+            encoder_hidden_channels=encoder_hidden_channels,
+            projection_hidden_dim=projection_hidden_dim,
+            fusion_hidden_dim=fusion_hidden_dim,
+            use_projection_bottleneck=use_projection_bottleneck
         ),
         training=TrainingConfig(
             max_epochs_stage1=max_epochs_stage1,
@@ -461,7 +512,8 @@ def show_model_configuration():
         ),
         augmentation=AugmentationConfig(
             jitter_sigma=jitter_sigma,
-            mask_max_length_pct=mask_pct
+            mask_max_length_pct=mask_pct,
+            scale_range=(scale_min, scale_max)
         )
     )
 
@@ -621,7 +673,11 @@ def show_training():
                 d_z=config.model.d_z,
                 num_clusters=config.model.num_clusters,
                 use_hybrid_encoder=config.model.use_hybrid_encoder,
-                seq_length=seq_len
+                seq_length=seq_len,
+                encoder_hidden_channels=config.model.encoder_hidden_channels,
+                projection_hidden_dim=config.model.projection_hidden_dim,
+                fusion_hidden_dim=config.model.fusion_hidden_dim,
+                use_projection_bottleneck=config.model.use_projection_bottleneck
             )
 
             # Count parameters
@@ -1022,12 +1078,23 @@ def show_model_management():
                     # Create model from config
                     config = checkpoint['config']
                     seq_len = config.model.seq_length if hasattr(config.model, 'seq_length') else 127
+
+                    # Get architecture parameters with backward compatibility
+                    encoder_hidden_channels = getattr(config.model, 'encoder_hidden_channels', 128)
+                    projection_hidden_dim = getattr(config.model, 'projection_hidden_dim', 512)
+                    fusion_hidden_dim = getattr(config.model, 'fusion_hidden_dim', 256)
+                    use_projection_bottleneck = getattr(config.model, 'use_projection_bottleneck', False)
+
                     model = UCLTSCModel(
                         input_channels=3,
                         d_z=config.model.d_z,
                         num_clusters=config.model.num_clusters,
                         use_hybrid_encoder=config.model.use_hybrid_encoder,
-                        seq_length=seq_len
+                        seq_length=seq_len,
+                        encoder_hidden_channels=encoder_hidden_channels,
+                        projection_hidden_dim=projection_hidden_dim,
+                        fusion_hidden_dim=fusion_hidden_dim,
+                        use_projection_bottleneck=use_projection_bottleneck
                     )
 
                     # Load weights

@@ -23,6 +23,10 @@ class ModelConfig:
         use_hybrid_encoder: If True, use 3 encoders; else 2 (default: False)
         tau: Temperature for NT-Xent loss (default: 0.5)
         seq_length: Sequence length for windows (default: 127)
+        encoder_hidden_channels: Hidden channels in encoder conv layers (default: 128)
+        projection_hidden_dim: Hidden dimension in projection head MLP (default: 512)
+        fusion_hidden_dim: Hidden dimension in fusion attention FFN (default: 256)
+        use_projection_bottleneck: Use bottleneck architecture in projection head (default: False)
     """
     input_channels: int = 3
     d_z: int = 128
@@ -30,6 +34,10 @@ class ModelConfig:
     use_hybrid_encoder: bool = False
     tau: float = 0.5
     seq_length: int = 127
+    encoder_hidden_channels: int = 128
+    projection_hidden_dim: int = 512
+    fusion_hidden_dim: int = 256
+    use_projection_bottleneck: bool = False
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -43,6 +51,12 @@ class ModelConfig:
             f"tau must be in [0.1, 1.0], got {self.tau}"
         assert 5 <= self.seq_length <= 512, \
             f"seq_length must be in [5, 512], got {self.seq_length}"
+        assert 32 <= self.encoder_hidden_channels <= 512, \
+            f"encoder_hidden_channels must be in [32, 512], got {self.encoder_hidden_channels}"
+        assert 64 <= self.projection_hidden_dim <= 2048, \
+            f"projection_hidden_dim must be in [64, 2048], got {self.projection_hidden_dim}"
+        assert 64 <= self.fusion_hidden_dim <= 1024, \
+            f"fusion_hidden_dim must be in [64, 1024], got {self.fusion_hidden_dim}"
 
 
 @dataclass
@@ -387,7 +401,11 @@ def save_preset_config(preset_name: str, config: Config) -> None:
             'num_clusters': config.model.num_clusters,
             'use_hybrid_encoder': config.model.use_hybrid_encoder,
             'tau': config.model.tau,
-            'seq_length': config.model.seq_length
+            'seq_length': config.model.seq_length,
+            'encoder_hidden_channels': config.model.encoder_hidden_channels,
+            'projection_hidden_dim': config.model.projection_hidden_dim,
+            'fusion_hidden_dim': config.model.fusion_hidden_dim,
+            'use_projection_bottleneck': config.model.use_projection_bottleneck
         },
         'training': {
             'batch_size': config.training.batch_size,
