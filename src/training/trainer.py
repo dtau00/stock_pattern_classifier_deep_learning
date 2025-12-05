@@ -16,6 +16,14 @@ import numpy as np
 from typing import Dict, Optional, Tuple
 from pathlib import Path
 
+# Register safe globals for torch.load (PyTorch 2.6+)
+# Import config classes for registration
+try:
+    from ..config.config import Config, ModelConfig, TrainingConfig, AugmentationConfig, DataConfig
+    torch.serialization.add_safe_globals([Config, ModelConfig, TrainingConfig, AugmentationConfig, DataConfig])
+except ImportError:
+    pass  # Will be registered when config is imported
+
 try:
     from .losses import NTXentLoss, ClusteringLoss, LambdaSchedule
     from .augmentation import TimeSeriesAugmentation
@@ -132,7 +140,8 @@ class TwoStageTrainer:
         val_loader: DataLoader,
         test_loader: Optional[DataLoader] = None,
         callback = None,
-        stage1_only: bool = False
+        stage1_only: bool = False,
+        dataset_info: Optional[Dict] = None
     ) -> Dict:
         """
         Run full two-stage training.
@@ -143,6 +152,7 @@ class TwoStageTrainer:
             test_loader: Optional test data loader
             callback: Optional callback object with on_epoch_end(stage, epoch, total_epochs, metrics)
             stage1_only: If True, only run Stage 1 and skip Stage 2
+            dataset_info: Optional dict with dataset info (total_windows, window_length, num_channels)
 
         Returns:
             Training history dictionary
@@ -163,6 +173,13 @@ class TwoStageTrainer:
             allocated_mem = torch.cuda.memory_allocated(0) / 1e9
             free_mem = total_mem - allocated_mem
             print(f"GPU Memory: {allocated_mem:.2f}GB used / {total_mem:.2f}GB total ({free_mem:.2f}GB free)")
+
+        # Dataset info (if provided)
+        if dataset_info:
+            print(f"\n[Prepackaged Dataset]")
+            print(f"Total Windows: {dataset_info.get('total_windows', 'N/A'):,}")
+            print(f"Window Size: {dataset_info.get('window_length', 'N/A')}")
+            print(f"Channels: {dataset_info.get('num_channels', 'N/A')}")
 
         # Model Architecture
         print(f"\n[Model Architecture]")
@@ -753,7 +770,16 @@ class TwoStageTrainer:
         """Load model checkpoint."""
         checkpoint_dir = Path('checkpoints')
         checkpoint = torch.load(checkpoint_dir / filename)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        # Use strict=False to handle architecture changes (e.g., different sequence lengths)
+        missing_keys, unexpected_keys = self.model.load_state_dict(
+            checkpoint['model_state_dict'],
+            strict=False
+        )
+
+        if missing_keys:
+            print(f"Warning: Missing {len(missing_keys)} keys in checkpoint (model has more layers)")
+        if unexpected_keys:
+            print(f"Warning: {len(unexpected_keys)} unexpected keys in checkpoint (saved model has extra layers)")
 
 
 def test_trainer():

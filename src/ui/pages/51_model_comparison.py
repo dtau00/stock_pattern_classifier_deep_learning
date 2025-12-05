@@ -24,6 +24,10 @@ project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.models.ucl_tsc_model import UCLTSCModel
+from src.config.config import Config, ModelConfig, TrainingConfig, AugmentationConfig, DataConfig
+
+# Register safe globals for torch.load (PyTorch 2.6+)
+torch.serialization.add_safe_globals([Config, ModelConfig, TrainingConfig, AugmentationConfig, DataConfig])
 
 
 def main():
@@ -369,14 +373,34 @@ def show_best_model_selection(models_info):
                         checkpoint = torch.load(model['path'], map_location='cpu')
                         config = checkpoint['config']
 
+                        # Get architecture parameters with backward compatibility
+                        seq_len = config.model.seq_length if hasattr(config.model, 'seq_length') else 127
+                        encoder_hidden_channels = getattr(config.model, 'encoder_hidden_channels', 128)
+                        projection_hidden_dim = getattr(config.model, 'projection_hidden_dim', 512)
+                        fusion_hidden_dim = getattr(config.model, 'fusion_hidden_dim', 256)
+                        use_projection_bottleneck = getattr(config.model, 'use_projection_bottleneck', False)
+
                         # Create model
                         loaded_model = UCLTSCModel(
                             input_channels=3,
                             d_z=config.model.d_z,
                             num_clusters=config.model.num_clusters,
-                            use_hybrid_encoder=config.model.use_hybrid_encoder
+                            use_hybrid_encoder=config.model.use_hybrid_encoder,
+                            seq_length=seq_len,
+                            encoder_hidden_channels=encoder_hidden_channels,
+                            projection_hidden_dim=projection_hidden_dim,
+                            fusion_hidden_dim=fusion_hidden_dim,
+                            use_projection_bottleneck=use_projection_bottleneck
                         )
-                        loaded_model.load_state_dict(checkpoint['model_state_dict'])
+
+                        # Load weights (strict=False to handle architecture changes)
+                        missing_keys, unexpected_keys = loaded_model.load_state_dict(
+                            checkpoint['model_state_dict'],
+                            strict=False
+                        )
+
+                        if missing_keys or unexpected_keys:
+                            st.warning(f"⚠️ Model architecture mismatch: {len(missing_keys)} missing, {len(unexpected_keys)} unexpected keys")
 
                         # Store in session
                         st.session_state['model'] = loaded_model

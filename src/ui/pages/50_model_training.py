@@ -34,10 +34,13 @@ project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.models.ucl_tsc_model import UCLTSCModel
-from src.config.config import Config, ModelConfig, TrainingConfig, AugmentationConfig, save_preset_config, load_preset_config
+from src.config.config import Config, ModelConfig, TrainingConfig, AugmentationConfig, DataConfig, save_preset_config, load_preset_config
 from src.training.trainer import TwoStageTrainer
 from src.evaluation import ConfidenceCalibrator
 import torch.nn.functional as F
+
+# Register safe globals for torch.load (PyTorch 2.6+)
+torch.serialization.add_safe_globals([Config, ModelConfig, TrainingConfig, AugmentationConfig, DataConfig])
 
 
 def save_training_summary(data_package, config, history, end_after_stage1, device, train_split, val_split, test_split, dataset_info=None):
@@ -1022,6 +1025,13 @@ def run_multi_config_training(config_queue, device):
 
                 callback = StreamlitCallback(progress_bar, status_text, metrics_container, config)
 
+                # Prepare dataset info for console logging
+                dataset_info = {
+                    'total_windows': len(st.session_state['data']),
+                    'window_length': st.session_state['data'].shape[2],
+                    'num_channels': st.session_state['data'].shape[1]
+                }
+
                 # Train
                 with st.spinner(f"Training {config_entry['name']}..."):
                     history = trainer.train(
@@ -1029,7 +1039,8 @@ def run_multi_config_training(config_queue, device):
                         val_loader,
                         test_loader,
                         callback=callback,
-                        stage1_only=config_entry['end_after_stage1']
+                        stage1_only=config_entry['end_after_stage1'],
+                        dataset_info=dataset_info
                     )
 
                 progress_bar.progress(0.95)
@@ -1253,6 +1264,11 @@ def show_training_summaries():
         'end_after_stage1': 'Stage 1 Only',
         'device': 'Device',
 
+        # Dataset properties
+        'dataset_total_windows': 'Total Windows',
+        'dataset_window_length': 'Window Size',
+        'dataset_num_channels': 'Channels',
+
         # Model config
         'model.d_z': 'd_z',
         'model.num_clusters': 'Clusters',
@@ -1319,6 +1335,14 @@ def show_training_summaries():
                 selected_cols.append('end_after_stage1')
             if st.checkbox("Device", value=False, key="col_device"):
                 selected_cols.append('device')
+
+            st.markdown("**Dataset Properties**")
+            if st.checkbox("Total Windows", value=False, key="col_total_windows"):
+                selected_cols.append('dataset_total_windows')
+            if st.checkbox("Window Size", value=False, key="col_window_size"):
+                selected_cols.append('dataset_window_length')
+            if st.checkbox("Channels", value=False, key="col_channels"):
+                selected_cols.append('dataset_num_channels')
 
             st.markdown("**Model Architecture**")
             if st.checkbox("d_z", value=True, key="col_d_z"):
@@ -1453,6 +1477,23 @@ def show_training_summaries():
         on_select="rerun",
         key="training_table",
         column_config={
+            # Dataset Properties
+            "Total Windows": st.column_config.NumberColumn(
+                "Total Windows",
+                help="Total number of time series windows in the prepackaged dataset",
+                format="%d"
+            ),
+            "Window Size": st.column_config.NumberColumn(
+                "Window Size",
+                help="Length of each time series window (sequence length)",
+                format="%d"
+            ),
+            "Channels": st.column_config.NumberColumn(
+                "Channels",
+                help="Number of feature channels (e.g., OHLCV = 5 channels)",
+                format="%d"
+            ),
+
             # Stage 1 Result Columns
             "S1 Epochs": st.column_config.NumberColumn(
                 "S1 Epochs",
@@ -1997,8 +2038,22 @@ def show_model_management():
                         use_projection_bottleneck=use_projection_bottleneck
                     )
 
-                    # Load weights
-                    model.load_state_dict(checkpoint['model_state_dict'])
+                    # Load weights (strict=False to handle architecture changes)
+                    # This allows loading models trained with different sequence lengths
+                    missing_keys, unexpected_keys = model.load_state_dict(
+                        checkpoint['model_state_dict'],
+                        strict=False
+                    )
+
+                    if missing_keys:
+                        st.warning(f"⚠️ Missing keys in checkpoint (model has more layers than saved): {len(missing_keys)} keys")
+                        with st.expander("View missing keys"):
+                            st.code('\n'.join(missing_keys[:20]))  # Show first 20
+
+                    if unexpected_keys:
+                        st.warning(f"⚠️ Unexpected keys in checkpoint (saved model has extra layers): {len(unexpected_keys)} keys")
+                        with st.expander("View unexpected keys"):
+                            st.code('\n'.join(unexpected_keys[:20]))  # Show first 20
 
                     # Store in session
                     st.session_state['model'] = model

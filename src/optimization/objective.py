@@ -14,16 +14,19 @@ from pathlib import Path
 
 try:
     from ..models.ucl_tsc_model import UCLTSCModel
-    from ..config.config import Config, ModelConfig, TrainingConfig, AugmentationConfig
+    from ..config.config import Config, ModelConfig, TrainingConfig, AugmentationConfig, DataConfig
     from ..training.trainer import TwoStageTrainer
     from .trial_handler import TrialHandler
 except ImportError:
     import sys
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from models.ucl_tsc_model import UCLTSCModel
-    from config.config import Config, ModelConfig, TrainingConfig, AugmentationConfig
+    from config.config import Config, ModelConfig, TrainingConfig, AugmentationConfig, DataConfig
     from training.trainer import TwoStageTrainer
     from optimization.trial_handler import TrialHandler
+
+# Register safe globals for torch.load (PyTorch 2.6+)
+torch.serialization.add_safe_globals([Config, ModelConfig, TrainingConfig, AugmentationConfig, DataConfig])
 
 
 def load_data_from_hdf5(
