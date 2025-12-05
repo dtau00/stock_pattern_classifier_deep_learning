@@ -131,7 +131,8 @@ class TwoStageTrainer:
         train_loader: DataLoader,
         val_loader: DataLoader,
         test_loader: Optional[DataLoader] = None,
-        callback = None
+        callback = None,
+        stage1_only: bool = False
     ) -> Dict:
         """
         Run full two-stage training.
@@ -141,6 +142,7 @@ class TwoStageTrainer:
             val_loader: Validation data loader
             test_loader: Optional test data loader
             callback: Optional callback object with on_epoch_end(stage, epoch, total_epochs, metrics)
+            stage1_only: If True, only run Stage 1 and skip Stage 2
 
         Returns:
             Training history dictionary
@@ -234,6 +236,12 @@ class TwoStageTrainer:
         print("\n[Stage 1] Contrastive Pre-training")
         print("-" * 60)
         self._train_stage1(train_loader, val_loader, callback)
+
+        if stage1_only:
+            print("\n" + "="*60)
+            print("Stage 1 Training Complete! (Stage 2 skipped)")
+            print("="*60)
+            return self.history
 
         # Initialize centroids using best Stage 1 checkpoint
         print("\n[Initialization] K-Means++ Centroids")
